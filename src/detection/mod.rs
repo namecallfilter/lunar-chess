@@ -1,7 +1,9 @@
 use anyhow::Result;
+use fast_image_resize::{PixelType, Resizer, images::Image};
 use image::RgbaImage;
 use ndarray::Array4;
 use ort::{
+	execution_providers::CUDAExecutionProvider,
 	session::{Session, builder::GraphOptimizationLevel},
 	value::TensorRef,
 };
@@ -11,45 +13,76 @@ use crate::drawing::{DetectedBoard, DetectedPiece};
 pub struct ChessDetector {
 	board_model: Session,
 	piece_model: Session,
+	resizer: Resizer,
 }
 
 impl ChessDetector {
 	pub fn new() -> Result<Self> {
+		tracing::info!("Initializing ONNX models with CUDA (GPU)...");
+
 		let board_model = Session::builder()?
+			.with_execution_providers([CUDAExecutionProvider::default().build()])?
 			.with_optimization_level(GraphOptimizationLevel::Level3)?
 			.with_intra_threads(4)?
 			.commit_from_file("models/board.onnx")?;
 
 		let piece_model = Session::builder()?
+			.with_execution_providers([CUDAExecutionProvider::default().build()])?
 			.with_optimization_level(GraphOptimizationLevel::Level3)?
 			.with_intra_threads(4)?
 			.commit_from_file("models/piece.onnx")?;
 
+		tracing::info!("ONNX models initialized successfully");
+
 		Ok(Self {
 			board_model,
 			piece_model,
+			resizer: Resizer::new(),
 		})
 	}
 
 	pub fn detect_board(&mut self, image: &RgbaImage) -> Result<Option<DetectedBoard>> {
+		let total_start = std::time::Instant::now();
+
 		let original_width = image.width();
 		let original_height = image.height();
 
+		let resize_start = std::time::Instant::now();
+
 		let target_size = 640u32;
-		let resized = image::imageops::resize(
-			image,
-			target_size,
-			target_size,
-			image::imageops::FilterType::Lanczos3,
-		);
 
+		let mut raw_buf = image.as_raw().clone();
+		let src_image = Image::from_slice_u8(
+			original_width,
+			original_height,
+			raw_buf.as_mut_slice(),
+			PixelType::U8x4,
+		)?;
+
+		let mut dst_image =
+			fast_image_resize::images::Image::new(target_size, target_size, PixelType::U8x4);
+
+		self.resizer.resize(&src_image, &mut dst_image, None)?;
+
+		let resized = RgbaImage::from_raw(target_size, target_size, dst_image.into_vec()).unwrap();
+
+		tracing::debug!("Board resize took {:?}", resize_start.elapsed());
+
+		let tensor_start = std::time::Instant::now();
 		let array = image_to_tensor(&resized);
+		tracing::debug!("Board tensor conversion took {:?}", tensor_start.elapsed());
 
+		let inference_start = std::time::Instant::now();
 		let board_outputs = self
 			.board_model
 			.run(ort::inputs!["images" => TensorRef::from_array_view(&array)?])?;
-		let board_predictions = board_outputs["output0"].try_extract_array::<f32>()?;
+		tracing::debug!("Board inference took {:?}", inference_start.elapsed());
 
+		let extract_start = std::time::Instant::now();
+		let board_predictions = board_outputs["output0"].try_extract_array::<f32>()?;
+		tracing::debug!("Board extract took {:?}", extract_start.elapsed());
+
+		let parse_start = std::time::Instant::now();
 		let predictions_view = board_predictions.view();
 		let detected_board = DetectedBoard::from_yolo_output(
 			&predictions_view,
@@ -57,6 +90,9 @@ impl ChessDetector {
 			original_height,
 			0.5,
 		);
+		tracing::debug!("Board parse took {:?}", parse_start.elapsed());
+
+		tracing::info!("Total board detection took {:?}", total_start.elapsed());
 
 		Ok(detected_board)
 	}
@@ -64,6 +100,9 @@ impl ChessDetector {
 	pub fn detect_pieces(
 		&mut self, image: &RgbaImage, board: &DetectedBoard,
 	) -> Result<Vec<DetectedPiece>> {
+		let total_start = std::time::Instant::now();
+
+		let crop_start = std::time::Instant::now();
 		let board_cropped = image::imageops::crop_imm(
 			image,
 			board.x as u32,
@@ -71,23 +110,40 @@ impl ChessDetector {
 			board.width as u32,
 			board.height as u32,
 		);
+		tracing::debug!("Piece crop took {:?}", crop_start.elapsed());
 
-		let warped_board = image::imageops::resize(
-			&board_cropped.to_image(),
-			640,
-			640,
-			image::imageops::FilterType::Lanczos3,
-		);
+		let resize_start = std::time::Instant::now();
 
-		warped_board.save("debug_warped.png")?;
+		let board_cropped_img = board_cropped.to_image();
 
+		let (width, height) = (board_cropped_img.width(), board_cropped_img.height());
+		let mut raw_buf = board_cropped_img.into_raw();
+		let src_image =
+			Image::from_slice_u8(width, height, raw_buf.as_mut_slice(), PixelType::U8x4)?;
+
+		let mut dst_image = fast_image_resize::images::Image::new(640, 640, PixelType::U8x4);
+
+		self.resizer.resize(&src_image, &mut dst_image, None)?;
+
+		let warped_board = RgbaImage::from_raw(640, 640, dst_image.into_vec()).unwrap();
+
+		tracing::debug!("Piece resize took {:?}", resize_start.elapsed());
+
+		let tensor_start = std::time::Instant::now();
 		let warped_array = image_to_tensor(&warped_board);
+		tracing::debug!("Piece tensor conversion took {:?}", tensor_start.elapsed());
 
+		let inference_start = std::time::Instant::now();
 		let piece_outputs = self
 			.piece_model
 			.run(ort::inputs!["images" => TensorRef::from_array_view(&warped_array)?])?;
-		let piece_predictions = piece_outputs["output0"].try_extract_array::<f32>()?;
+		tracing::debug!("Piece inference took {:?}", inference_start.elapsed());
 
+		let extract_start = std::time::Instant::now();
+		let piece_predictions = piece_outputs["output0"].try_extract_array::<f32>()?;
+		tracing::debug!("Piece extract took {:?}", extract_start.elapsed());
+
+		let parse_start = std::time::Instant::now();
 		let piece_predictions_view = piece_predictions.view();
 		let detected_pieces_warped =
 			DetectedPiece::from_yolo_output(&piece_predictions_view, 640, 640, 0.5);
@@ -105,6 +161,9 @@ impl ChessDetector {
 				piece
 			})
 			.collect();
+		tracing::debug!("Piece parse took {:?}", parse_start.elapsed());
+
+		tracing::info!("Total piece detection took {:?}", total_start.elapsed());
 
 		Ok(detected_pieces)
 	}

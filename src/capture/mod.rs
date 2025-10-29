@@ -14,8 +14,6 @@ impl ScreenCapture {
 
 	pub fn capture(&self) -> Result<RgbaImage> {
 		let image = self.monitor.capture_image()?;
-		image.save("debug_screenshot.png")?;
-
 		Ok(image)
 	}
 

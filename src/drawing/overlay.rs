@@ -10,7 +10,7 @@ use winit::{
 	application::ApplicationHandler,
 	dpi::{PhysicalPosition, PhysicalSize},
 	event::WindowEvent,
-	event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy},
+	event_loop::{ActiveEventLoop, EventLoop},
 	window::{Window, WindowId, WindowLevel},
 };
 
@@ -154,17 +154,33 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 
 			#[cfg(target_os = "windows")]
 			{
+				use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 				window.set_cursor_hittest(false).unwrap();
+
+				unsafe {
+					use windows::Win32::{
+						Foundation::HWND,
+						UI::WindowsAndMessaging::{
+							SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
+						},
+					};
+
+					if let RawWindowHandle::Win32(handle) = window.window_handle().unwrap().as_raw()
+					{
+						let hwnd = HWND(handle.hwnd.get() as *mut _);
+						SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE).ok();
+					}
+				}
 			}
 
-			#[cfg(target_os = "macos")]
-			{
-				use winit::platform::macos::WindowExtMacOS;
-				let window_attributes = WindowAttributes::default()
-					.with_transparent(true)
-					.with_always_on_top(true)
-					.with_accepts_first_mouse(false);
-			}
+			// #[cfg(target_os = "macos")]
+			// {
+			// 	use winit::platform::macos::WindowExtMacOS;
+			// 	let window_attributes = WindowAttributes::default()
+			// 		.with_transparent(true)
+			// 		.with_always_on_top(true)
+			// 		.with_accepts_first_mouse(false);
+			// }
 
 			let context = softbuffer::Context::new(window.clone()).unwrap();
 			let mut surface = softbuffer::Surface::new(&context, window.clone()).unwrap();
