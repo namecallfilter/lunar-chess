@@ -2,6 +2,7 @@ use std::{thread, time::Duration};
 
 use anyhow::Result;
 
+mod board;
 mod capture;
 mod detection;
 mod drawing;

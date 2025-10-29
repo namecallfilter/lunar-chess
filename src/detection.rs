@@ -86,7 +86,7 @@ impl ChessDetector {
 			&predictions_view,
 			original_width,
 			original_height,
-			0.5,
+			0.75,
 		);
 		tracing::trace!("Board result parsing took {:?}", parse_start.elapsed());
 
@@ -141,7 +141,7 @@ impl ChessDetector {
 		let parse_start = std::time::Instant::now();
 		let piece_predictions_view = piece_predictions.view();
 		let detected_pieces_warped =
-			DetectedPiece::from_yolo_output(&piece_predictions_view, 640, 640, 0.5);
+			DetectedPiece::from_yolo_output(&piece_predictions_view, 640, 640, 0.75);
 
 		let scale_x = board.width / 640.0;
 		let scale_y = board.height / 640.0;

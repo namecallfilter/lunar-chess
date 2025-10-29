@@ -69,12 +69,12 @@ impl DetectedBoard {
 	}
 }
 
-pub fn draw_detected_board(dt: &mut DrawTarget, board: &DetectedBoard) {
-	draw_board_outline(dt, board.x, board.y, board.width, board.height);
-	draw_chess_grid(dt, board.x, board.y, board.width, board.height);
+// pub fn draw_detected_board(dt: &mut DrawTarget, board: &DetectedBoard) {
+// 	draw_board_outline(dt, board.x, board.y, board.width, board.height);
+// 	draw_chess_grid(dt, board.x, board.y, board.width, board.height);
 
-	// draw_confidence_label(dt, board);
-}
+// 	// draw_confidence_label(dt, board);
+// }
 
 pub fn draw_board_outline(dt: &mut DrawTarget, x: f32, y: f32, width: f32, height: f32) {
 	let mut pb = PathBuilder::new();
@@ -148,31 +148,31 @@ pub fn draw_chess_grid(dt: &mut DrawTarget, x: f32, y: f32, width: f32, height: 
 // 	// Note: add text rendering
 // }
 
-pub fn draw_square_highlight(
-	dt: &mut DrawTarget, board: &DetectedBoard, file: u8, rank: u8, color: (u8, u8, u8, u8),
-) {
-	if file >= 8 || rank >= 8 {
-		return;
-	}
+// pub fn draw_square_highlight(
+// 	dt: &mut DrawTarget, board: &DetectedBoard, file: u8, rank: u8, color: (u8, u8, u8, u8),
+// ) {
+// 	if file >= 8 || rank >= 8 {
+// 		return;
+// 	}
 
-	let cell_width = board.width / 8.0;
-	let cell_height = board.height / 8.0;
+// 	let cell_width = board.width / 8.0;
+// 	let cell_height = board.height / 8.0;
 
-	let x = board.x + (file as f32 * cell_width);
-	let y = board.y + (rank as f32 * cell_height);
+// 	let x = board.x + (file as f32 * cell_width);
+// 	let y = board.y + (rank as f32 * cell_height);
 
-	let mut pb = PathBuilder::new();
-	pb.rect(x, y, cell_width, cell_height);
-	let path = pb.finish();
+// 	let mut pb = PathBuilder::new();
+// 	pb.rect(x, y, cell_width, cell_height);
+// 	let path = pb.finish();
 
-	dt.fill(
-		&path,
-		&Source::Solid(SolidSource::from_unpremultiplied_argb(
-			color.0, color.1, color.2, color.3,
-		)),
-		&DrawOptions::new(),
-	);
-}
+// 	dt.fill(
+// 		&path,
+// 		&Source::Solid(SolidSource::from_unpremultiplied_argb(
+// 			color.0, color.1, color.2, color.3,
+// 		)),
+// 		&DrawOptions::new(),
+// 	);
+// }
 
 impl DetectedPiece {
 	pub fn from_yolo_output(
