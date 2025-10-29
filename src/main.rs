@@ -5,6 +5,7 @@ use anyhow::Result;
 mod capture;
 mod detection;
 mod drawing;
+mod stockfish;
 
 use capture::ScreenCapture;
 use detection::ChessDetector;
