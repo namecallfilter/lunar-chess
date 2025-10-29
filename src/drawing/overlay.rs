@@ -61,16 +61,6 @@ impl OverlayWindow {
 		}
 	}
 
-	pub fn set_board_bounds(&mut self, bounds: BoardBounds) {
-		self.board_bounds = Some(bounds);
-		self.should_redraw = true;
-	}
-
-	pub fn set_pieces(&mut self, pieces: Vec<DetectedPiece>) {
-		self.pieces = pieces;
-		self.should_redraw = true;
-	}
-
 	pub fn update_detections(&mut self, bounds: Option<BoardBounds>, pieces: Vec<DetectedPiece>) {
 		self.board_bounds = bounds;
 		self.pieces = pieces;

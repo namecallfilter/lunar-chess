@@ -28,6 +28,7 @@ impl DetectedBoard {
 	) -> Option<Self> {
 		let shape = predictions.shape();
 		if shape.len() < 3 {
+			tracing::warn!("Invalid YOLO output shape for board detection");
 			return None;
 		}
 
@@ -180,6 +181,7 @@ impl DetectedPiece {
 	) -> Vec<Self> {
 		let shape = predictions.shape();
 		if shape.len() < 3 {
+			tracing::warn!("Invalid YOLO output shape for piece detection");
 			return Vec::new();
 		}
 
@@ -189,7 +191,7 @@ impl DetectedPiece {
 		let scale_x = img_width as f32 / scale_factor;
 		let scale_y = img_height as f32 / scale_factor;
 
-		// 0: r, 1: n, 2: b, 3: q, 4: k, 5: p, 6: R, 7: N, 8: B, 9: Q, 10: K, 11: P
+		// Piece type mapping: 0: r, 1: n, 2: b, 3: q, 4: k, 5: p, 6: R, 7: N, 8: B, 9: Q, 10: K, 11: P
 		let piece_chars = ['r', 'n', 'b', 'q', 'k', 'p', 'R', 'N', 'B', 'Q', 'K', 'P'];
 		let mut pieces = Vec::new();
 
@@ -294,7 +296,7 @@ pub fn draw_piece_labels(dt: &mut DrawTarget, pieces: &[DetectedPiece]) {
 		.ok();
 
 	let Some(Ok(font)) = font else {
-		eprintln!("Warning: Could not load system font for piece labels");
+		tracing::warn!("Could not load system font for piece labels");
 		return;
 	};
 

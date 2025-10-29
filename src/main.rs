@@ -15,13 +15,14 @@ async fn main() -> Result<()> {
 	tracing_subscriber::fmt()
 		.with_env_filter(
 			tracing_subscriber::EnvFilter::from_default_env()
-				.add_directive(tracing::Level::DEBUG.into()),
+				.add_directive("lunar_chess=debug".parse().unwrap())
+				.add_directive(tracing::Level::WARN.into()),
 		)
 		.with_target(false)
 		.with_thread_ids(true)
 		.init();
 
-	tracing::info!("Lunar Chess Starting");
+	tracing::info!("Lunar Chess starting");
 
 	let init_start = std::time::Instant::now();
 
@@ -29,23 +30,26 @@ async fn main() -> Result<()> {
 	let capture = ScreenCapture::new()?;
 	let screen_width = capture.width();
 	let screen_height = capture.height();
-	tracing::info!("Screen: {}x{}", screen_width, screen_height);
+	tracing::info!("Screen resolution: {}x{}", screen_width, screen_height);
 
 	tracing::info!("Starting overlay window...");
 	let overlay_start = std::time::Instant::now();
 	let (event_loop, mut app) = start_overlay(screen_width, screen_height)?;
 	let proxy = event_loop.create_proxy();
-	tracing::info!("Overlay setup took {:?}", overlay_start.elapsed());
+	tracing::debug!("Overlay setup took {:?}", overlay_start.elapsed());
 
-	tracing::info!("Total initialization took {:?}", init_start.elapsed());
+	tracing::info!("Initialization complete in {:?}", init_start.elapsed());
 
 	thread::spawn(move || {
-		tracing::info!("Detection thread started");
+		tracing::debug!("Detection thread started");
 
 		let capture = match ScreenCapture::new() {
 			Ok(c) => c,
 			Err(e) => {
-				tracing::error!("Failed to initialize capture in detection thread: {}", e);
+				tracing::error!(
+					"Failed to initialize screen capture in detection thread: {}",
+					e
+				);
 				return;
 			}
 		};
@@ -53,34 +57,34 @@ async fn main() -> Result<()> {
 		let mut detector = match ChessDetector::new() {
 			Ok(d) => d,
 			Err(e) => {
-				tracing::error!("Failed to initialize detector: {}", e);
+				tracing::error!("Failed to initialize chess detector: {}", e);
 				return;
 			}
 		};
 
-		tracing::info!("Starting detection loop (updating every 1 second)...");
+		tracing::info!("Detection loop started (polling interval: 1s)");
 		let mut iteration = 0;
 
 		loop {
 			let loop_start = std::time::Instant::now();
 			iteration += 1;
-			tracing::info!("Iteration {}", iteration);
+			tracing::debug!("Detection iteration {}", iteration);
 
 			let capture_start = std::time::Instant::now();
 			let image = match capture.capture() {
 				Ok(img) => img,
 				Err(e) => {
-					tracing::error!("Failed to capture screen: {}", e);
+					tracing::error!("Screen capture failed: {}", e);
 					thread::sleep(Duration::from_secs(1));
 					continue;
 				}
 			};
-			tracing::debug!("Screen capture took {:?}", capture_start.elapsed());
+			tracing::trace!("Screen capture took {:?}", capture_start.elapsed());
 
 			let board = match detector.detect_board(&image) {
 				Ok(Some(b)) => {
-					tracing::info!(
-						"Board detected: ({:.0}, {:.0}) {}x{} - conf: {:.1}%",
+					tracing::debug!(
+						"Board detected at ({:.0}, {:.0}) size {}x{} (confidence: {:.1}%)",
 						b.x,
 						b.y,
 						b.width,
@@ -90,7 +94,7 @@ async fn main() -> Result<()> {
 					b
 				}
 				Ok(None) => {
-					tracing::warn!("No board detected");
+					tracing::debug!("No board detected in current frame");
 					proxy
 						.send_event(UserEvent::UpdateDetections(None, Vec::new()))
 						.ok();
@@ -98,7 +102,7 @@ async fn main() -> Result<()> {
 					continue;
 				}
 				Err(e) => {
-					tracing::error!("Board detection error: {}", e);
+					tracing::error!("Board detection failed: {}", e);
 					thread::sleep(Duration::from_secs(1));
 					continue;
 				}
@@ -106,11 +110,11 @@ async fn main() -> Result<()> {
 
 			let pieces = match detector.detect_pieces(&image, &board) {
 				Ok(p) => {
-					tracing::info!("Detected {} pieces", p.len());
+					tracing::debug!("Detected {} pieces on board", p.len());
 					p
 				}
 				Err(e) => {
-					tracing::error!("Piece detection error: {}", e);
+					tracing::error!("Piece detection failed: {}", e);
 					Vec::new()
 				}
 			};
@@ -123,13 +127,13 @@ async fn main() -> Result<()> {
 				height: board.height,
 			};
 
-			proxy
-				.send_event(UserEvent::UpdateDetections(Some(bounds), pieces))
-				.ok();
-			tracing::debug!("UI update event sent in {:?}", update_start.elapsed());
+			if let Err(e) = proxy.send_event(UserEvent::UpdateDetections(Some(bounds), pieces)) {
+				tracing::error!("Failed to send UI update event: {}", e);
+			}
+			tracing::trace!("UI update event sent in {:?}", update_start.elapsed());
 
 			let total_time = loop_start.elapsed();
-			tracing::info!("Total iteration time: {:?}\n", total_time);
+			tracing::debug!("Iteration completed in {:?}", total_time);
 
 			thread::sleep(Duration::from_secs(1));
 		}
