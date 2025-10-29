@@ -3,25 +3,20 @@ name = "lunar-chess"
 version = "0.1.0"
 edition = "2024"
 
-[workspace]
-members = [
-	"dynboard-gen",
-]
-
 [dependencies]
-anyhow = "1.0.98"
-opencv = "0.94.4"
-ort = "1.16.3"
+anyhow = "1.0.100"
+font-kit = "0.14.3"
+image = "0.25.8"
+ndarray = "0.16.1"
+ort = "=2.0.0-rc.10"
+raqote = "0.8.5"
 ruci = { version = "2.1.0", features = ["engine-async", "tokio-process"] }
-shakmaty = "0.27.3"
-tokio = { version = "1.45.0", features = ["macros", "rt-multi-thread", "process"] }
-xcap = "0.5.2"
-
-[target.'cfg(windows)'.dependencies.windows]  
-version = "0.61"
-features = [
-	"Win32_Foundation",
-	"Win32_Graphics_Gdi",
-	"Win32_UI_WindowsAndMessaging",
-	"Win32_System_LibraryLoader",
-]
+shakmaty = "0.29.4"
+softbuffer = "0.4"
+tokio = { version = "1.48.0", features = [
+	"macros",
+	"rt-multi-thread",
+	"process",
+] }
+winit = "0.30"
+xcap = "0.7"
