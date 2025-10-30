@@ -1,0 +1,28 @@
+Good question! For your situation with false positives, I'd recommend:
+
+  Train without post-processing first, focusing on shape/structure rather than colors. Here's why:
+
+  1. Post-processing masks the real problem - If your model is detecting pieces based on color rather than shape, post-processing won't fix the
+  root cause. You'll just be adding band-aids.
+  2. Better training data approach:
+    - Add more varied training examples with different:
+        - Board themes (colors, wood textures, etc.)
+      - Piece styles (3D, 2D, different designs)
+      - Lighting conditions
+    - Use data augmentation to vary colors (hue/saturation shifts)
+    - This forces the model to learn piece shapes not colors
+  3. Post-processing should be for edge cases - After your model is good at recognizing shapes, THEN add post-processing for:
+    - Filtering detections with low confidence
+    - Handling the 32-piece max constraint
+    - Fixing obvious errors (like 39 pieces detected)
+
+  What to do now:
+
+  1. Collect more training data - Focus on positions where it's failing
+  2. Data augmentation - Add color jittering/shifting to make it color-invariant
+  3. Train on shape features - Maybe try training on grayscale images to force shape learning
+  4. Keep the basic post-processing - The 32-piece limit is good, but don't add complex rules yet
+
+  Once your model is reliably detecting pieces by shape (works across different board themes), THEN add smarter post-processing for final polish.
+
+  Does that make sense? The false positives suggest the model needs better training data, not more post-processing.

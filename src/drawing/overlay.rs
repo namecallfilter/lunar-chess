@@ -15,13 +15,24 @@ use winit::{
 };
 
 use crate::drawing::board::{
-	DetectedPiece, draw_board_outline, draw_chess_grid, draw_piece_labels,
+	DetectedBoard, DetectedPiece, draw_board_outline, draw_chess_grid, draw_move_arrow,
+	draw_piece_labels,
 };
 
 #[derive(Debug, Clone)]
 pub enum UserEvent {
 	UpdateDetections(Option<BoardBounds>, Vec<DetectedPiece>),
+	UpdateBestMoves(Vec<BestMove>),
 	Tick,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BestMove {
+	pub from_file: u8,
+	pub from_rank: u8,
+	pub to_file: u8,
+	pub to_rank: u8,
+	pub score: i32,
 }
 
 pub struct OverlayWindow {
@@ -31,6 +42,7 @@ pub struct OverlayWindow {
 	draw_target: Option<DrawTarget>,
 	board_bounds: Option<BoardBounds>,
 	pieces: Vec<DetectedPiece>,
+	best_moves: Vec<BestMove>,
 	screen_width: u32,
 	screen_height: u32,
 	should_redraw: bool,
@@ -54,6 +66,7 @@ impl OverlayWindow {
 			draw_target: None,
 			board_bounds: None,
 			pieces: Vec::new(),
+			best_moves: Vec::new(),
 			screen_width: 1920,
 			screen_height: 1080,
 			should_redraw: false,
@@ -64,6 +77,11 @@ impl OverlayWindow {
 	pub fn update_detections(&mut self, bounds: Option<BoardBounds>, pieces: Vec<DetectedPiece>) {
 		self.board_bounds = bounds;
 		self.pieces = pieces;
+		self.should_redraw = true;
+	}
+
+	pub fn update_best_moves(&mut self, best_moves: Vec<BestMove>) {
+		self.best_moves = best_moves;
 		self.should_redraw = true;
 	}
 
@@ -80,6 +98,35 @@ impl OverlayWindow {
 			draw_chess_grid(dt, bounds.x, bounds.y, bounds.width, bounds.height);
 
 			draw_piece_labels(dt, &self.pieces);
+
+			if !self.best_moves.is_empty() {
+				for (index, best_move) in self.best_moves.iter().enumerate() {
+					let opacity = match index {
+						0 => 255,
+						1 => 180,
+						2 => 110,
+						_ => 80,
+					};
+
+					let arrow_color = (opacity, 100, 150, 255);
+
+					draw_move_arrow(
+						dt,
+						&DetectedBoard {
+							x: bounds.x,
+							y: bounds.y,
+							width: bounds.width,
+							height: bounds.height,
+							confidence: 1.0,
+						},
+						best_move.from_file,
+						best_move.from_rank,
+						best_move.to_file,
+						best_move.to_rank,
+						arrow_color,
+					);
+				}
+			}
 		}
 	}
 
@@ -105,6 +152,12 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 		match event {
 			UserEvent::UpdateDetections(bounds, pieces) => {
 				self.update_detections(bounds, pieces);
+				if let Some(window) = &self.window {
+					window.request_redraw();
+				}
+			}
+			UserEvent::UpdateBestMoves(best_moves) => {
+				self.update_best_moves(best_moves);
 				if let Some(window) = &self.window {
 					window.request_redraw();
 				}
@@ -162,15 +215,6 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 					}
 				}
 			}
-
-			// #[cfg(target_os = "macos")]
-			// {
-			// 	use winit::platform::macos::WindowExtMacOS;
-			// 	let window_attributes = WindowAttributes::default()
-			// 		.with_transparent(true)
-			// 		.with_always_on_top(true)
-			// 		.with_accepts_first_mouse(false);
-			// }
 
 			let context = softbuffer::Context::new(window.clone()).unwrap();
 			let mut surface = softbuffer::Surface::new(&context, window.clone()).unwrap();

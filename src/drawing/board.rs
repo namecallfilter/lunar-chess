@@ -3,6 +3,7 @@ use raqote::{
 	DrawOptions, DrawTarget, PathBuilder, Point, SolidSource, Source, StrokeStyle, Transform,
 };
 
+#[derive(Clone, Debug)]
 pub struct DetectedBoard {
 	pub x: f32,
 	pub y: f32,
@@ -69,13 +70,6 @@ impl DetectedBoard {
 	}
 }
 
-// pub fn draw_detected_board(dt: &mut DrawTarget, board: &DetectedBoard) {
-// 	draw_board_outline(dt, board.x, board.y, board.width, board.height);
-// 	draw_chess_grid(dt, board.x, board.y, board.width, board.height);
-
-// 	// draw_confidence_label(dt, board);
-// }
-
 pub fn draw_board_outline(dt: &mut DrawTarget, x: f32, y: f32, width: f32, height: f32) {
 	let mut pb = PathBuilder::new();
 	pb.rect(x, y, width, height);
@@ -126,53 +120,278 @@ pub fn draw_chess_grid(dt: &mut DrawTarget, x: f32, y: f32, width: f32, height: 
 	}
 }
 
-// fn draw_confidence_label(dt: &mut DrawTarget, board: &DetectedBoard) {
-// 	let label_height = 25.0;
-// 	let label_width = 120.0;
+pub fn draw_move_arrow(
+	dt: &mut DrawTarget, board: &DetectedBoard, from_file: u8, from_rank: u8, to_file: u8,
+	to_rank: u8, color: (u8, u8, u8, u8),
+) {
+	if from_file >= 8 || from_rank >= 8 || to_file >= 8 || to_rank >= 8 {
+		return;
+	}
 
-// 	let mut pb = PathBuilder::new();
-// 	pb.rect(
-// 		board.x,
-// 		board.y - label_height - 5.0,
-// 		label_width,
-// 		label_height,
-// 	);
-// 	let path = pb.finish();
+	let cell_width = board.width / 8.0;
+	let cell_height = board.height / 8.0;
 
-// 	dt.fill(
-// 		&path,
-// 		&Source::Solid(SolidSource::from_unpremultiplied_argb(200, 0, 0, 0)),
-// 		&DrawOptions::new(),
-// 	);
+	let from_x = board.x + (from_file as f32 + 0.5) * cell_width;
+	let from_y = board.y + (from_rank as f32 + 0.5) * cell_height;
+	let to_x = board.x + (to_file as f32 + 0.5) * cell_width;
+	let to_y = board.y + (to_rank as f32 + 0.5) * cell_height;
 
-// 	// Note: add text rendering
-// }
+	let file_diff = (to_file as i8 - from_file as i8).abs();
+	let rank_diff = (to_rank as i8 - from_rank as i8).abs();
+	let is_knight_move = (file_diff == 2 && rank_diff == 1) || (file_diff == 1 && rank_diff == 2);
 
-// pub fn draw_square_highlight(
-// 	dt: &mut DrawTarget, board: &DetectedBoard, file: u8, rank: u8, color: (u8, u8, u8, u8),
-// ) {
-// 	if file >= 8 || rank >= 8 {
-// 		return;
-// 	}
+	if is_knight_move {
+		draw_knight_arrow(dt, board, from_file, from_rank, to_file, to_rank, color);
+	} else {
+		draw_straight_arrow(
+			dt,
+			from_x,
+			from_y,
+			to_x,
+			to_y,
+			cell_width,
+			cell_height,
+			color,
+		);
+	}
+}
 
-// 	let cell_width = board.width / 8.0;
-// 	let cell_height = board.height / 8.0;
+fn draw_straight_arrow(
+	dt: &mut DrawTarget, from_x: f32, from_y: f32, to_x: f32, to_y: f32, cell_width: f32,
+	cell_height: f32, color: (u8, u8, u8, u8),
+) {
+	let dx = to_x - from_x;
+	let dy = to_y - from_y;
+	let length = (dx * dx + dy * dy).sqrt();
 
-// 	let x = board.x + (file as f32 * cell_width);
-// 	let y = board.y + (rank as f32 * cell_height);
+	if length < 1.0 {
+		return;
+	}
 
-// 	let mut pb = PathBuilder::new();
-// 	pb.rect(x, y, cell_width, cell_height);
-// 	let path = pb.finish();
+	let norm_dx = dx / length;
+	let norm_dy = dy / length;
 
-// 	dt.fill(
-// 		&path,
-// 		&Source::Solid(SolidSource::from_unpremultiplied_argb(
-// 			color.0, color.1, color.2, color.3,
-// 		)),
-// 		&DrawOptions::new(),
-// 	);
-// }
+	let arrow_width = cell_width.min(cell_height) * 0.25;
+	let arrow_head_length = cell_width.min(cell_height) * 0.5;
+	let arrow_head_width = arrow_width * 2.5;
+
+	let margin = cell_width.min(cell_height) * 0.3;
+	let shaft_start_x = from_x + norm_dx * margin;
+	let shaft_start_y = from_y + norm_dy * margin;
+
+	let shaft_end_x = to_x - norm_dx * arrow_head_length;
+	let shaft_end_y = to_y - norm_dy * arrow_head_length;
+
+	let perp_x = -norm_dy;
+	let perp_y = norm_dx;
+
+	let mut pb = PathBuilder::new();
+	pb.move_to(
+		shaft_start_x + perp_x * arrow_width / 2.0,
+		shaft_start_y + perp_y * arrow_width / 2.0,
+	);
+	pb.line_to(
+		shaft_end_x + perp_x * arrow_width / 2.0,
+		shaft_end_y + perp_y * arrow_width / 2.0,
+	);
+	pb.line_to(
+		shaft_end_x - perp_x * arrow_width / 2.0,
+		shaft_end_y - perp_y * arrow_width / 2.0,
+	);
+	pb.line_to(
+		shaft_start_x - perp_x * arrow_width / 2.0,
+		shaft_start_y - perp_y * arrow_width / 2.0,
+	);
+	pb.close();
+
+	let path = pb.finish();
+	dt.fill(
+		&path,
+		&Source::Solid(SolidSource::from_unpremultiplied_argb(
+			color.0, color.1, color.2, color.3,
+		)),
+		&DrawOptions::new(),
+	);
+
+	let mut pb = PathBuilder::new();
+	pb.move_to(to_x, to_y);
+	pb.line_to(
+		shaft_end_x + perp_x * arrow_head_width / 2.0,
+		shaft_end_y + perp_y * arrow_head_width / 2.0,
+	);
+	pb.line_to(
+		shaft_end_x - perp_x * arrow_head_width / 2.0,
+		shaft_end_y - perp_y * arrow_head_width / 2.0,
+	);
+	pb.close();
+
+	let path = pb.finish();
+	dt.fill(
+		&path,
+		&Source::Solid(SolidSource::from_unpremultiplied_argb(
+			color.0, color.1, color.2, color.3,
+		)),
+		&DrawOptions::new(),
+	);
+}
+
+fn draw_knight_arrow(
+	dt: &mut DrawTarget, board: &DetectedBoard, from_file: u8, from_rank: u8, to_file: u8,
+	to_rank: u8, color: (u8, u8, u8, u8),
+) {
+	let cell_width = board.width / 8.0;
+	let cell_height = board.height / 8.0;
+
+	let from_x = board.x + (from_file as f32 + 0.5) * cell_width;
+	let from_y = board.y + (from_rank as f32 + 0.5) * cell_height;
+	let to_x = board.x + (to_file as f32 + 0.5) * cell_width;
+	let to_y = board.y + (to_rank as f32 + 0.5) * cell_height;
+
+	let file_diff = (to_file as i8 - from_file as i8).abs();
+	let rank_diff = (to_rank as i8 - from_rank as i8).abs();
+
+	let mid_x = if file_diff == 2 { to_x } else { from_x };
+
+	let mid_y = if rank_diff == 2 { to_y } else { from_y };
+
+	let arrow_width = cell_width.min(cell_height) * 0.25;
+	let arrow_head_length = cell_width.min(cell_height) * 0.5;
+	let arrow_head_width = arrow_width * 2.5;
+	let margin = cell_width.min(cell_height) * 0.3;
+
+	let dx1 = mid_x - from_x;
+	let dy1 = mid_y - from_y;
+	let len1 = (dx1 * dx1 + dy1 * dy1).sqrt();
+
+	let dx2 = to_x - mid_x;
+	let dy2 = to_y - mid_y;
+	let len2 = (dx2 * dx2 + dy2 * dy2).sqrt();
+
+	if len1 < 1.0 || len2 < 1.0 {
+		return;
+	}
+
+	let norm_dx1 = dx1 / len1;
+	let norm_dy1 = dy1 / len1;
+	let perp_x1 = -norm_dy1;
+	let perp_y1 = norm_dx1;
+
+	let norm_dx2 = dx2 / len2;
+	let norm_dy2 = dy2 / len2;
+	let perp_x2 = -norm_dy2;
+	let perp_y2 = norm_dx2;
+
+	let seg1_start_x = from_x + norm_dx1 * margin;
+	let seg1_start_y = from_y + norm_dy1 * margin;
+
+	let seg2_end_x = to_x - norm_dx2 * arrow_head_length;
+	let seg2_end_y = to_y - norm_dy2 * arrow_head_length;
+
+	fn line_intersection(
+		x1: f32, y1: f32, dx1: f32, dy1: f32, x2: f32, y2: f32, dx2: f32, dy2: f32,
+	) -> Option<(f32, f32)> {
+		let denom = dx1 * dy2 - dy1 * dx2;
+		if denom.abs() < 0.0001 {
+			return None;
+		}
+		let t = ((x2 - x1) * dy2 - (y2 - y1) * dx2) / denom;
+		Some((x1 + t * dx1, y1 + t * dy1))
+	}
+
+	let outer_miter = line_intersection(
+		seg1_start_x + perp_x1 * arrow_width / 2.0,
+		seg1_start_y + perp_y1 * arrow_width / 2.0,
+		norm_dx1,
+		norm_dy1,
+		seg2_end_x + perp_x2 * arrow_width / 2.0,
+		seg2_end_y + perp_y2 * arrow_width / 2.0,
+		-norm_dx2,
+		-norm_dy2,
+	);
+
+	let inner_miter = line_intersection(
+		seg1_start_x - perp_x1 * arrow_width / 2.0,
+		seg1_start_y - perp_y1 * arrow_width / 2.0,
+		norm_dx1,
+		norm_dy1,
+		seg2_end_x - perp_x2 * arrow_width / 2.0,
+		seg2_end_y - perp_y2 * arrow_width / 2.0,
+		-norm_dx2,
+		-norm_dy2,
+	);
+
+	let mut pb = PathBuilder::new();
+
+	pb.move_to(
+		seg1_start_x + perp_x1 * arrow_width / 2.0,
+		seg1_start_y + perp_y1 * arrow_width / 2.0,
+	);
+
+	if let Some((mx, my)) = outer_miter {
+		pb.line_to(mx, my);
+	} else {
+		pb.line_to(
+			mid_x + perp_x1 * arrow_width / 2.0,
+			mid_y + perp_y1 * arrow_width / 2.0,
+		);
+	}
+
+	pb.line_to(
+		seg2_end_x + perp_x2 * arrow_width / 2.0,
+		seg2_end_y + perp_y2 * arrow_width / 2.0,
+	);
+
+	pb.line_to(
+		seg2_end_x - perp_x2 * arrow_width / 2.0,
+		seg2_end_y - perp_y2 * arrow_width / 2.0,
+	);
+
+	if let Some((mx, my)) = inner_miter {
+		pb.line_to(mx, my);
+	} else {
+		pb.line_to(
+			mid_x - perp_x1 * arrow_width / 2.0,
+			mid_y - perp_y1 * arrow_width / 2.0,
+		);
+	}
+
+	pb.line_to(
+		seg1_start_x - perp_x1 * arrow_width / 2.0,
+		seg1_start_y - perp_y1 * arrow_width / 2.0,
+	);
+
+	pb.close();
+
+	let path = pb.finish();
+	dt.fill(
+		&path,
+		&Source::Solid(SolidSource::from_unpremultiplied_argb(
+			color.0, color.1, color.2, color.3,
+		)),
+		&DrawOptions::new(),
+	);
+
+	let mut pb = PathBuilder::new();
+	pb.move_to(to_x, to_y);
+	pb.line_to(
+		seg2_end_x + perp_x2 * arrow_head_width / 2.0,
+		seg2_end_y + perp_y2 * arrow_head_width / 2.0,
+	);
+	pb.line_to(
+		seg2_end_x - perp_x2 * arrow_head_width / 2.0,
+		seg2_end_y - perp_y2 * arrow_head_width / 2.0,
+	);
+	pb.close();
+
+	let path = pb.finish();
+	dt.fill(
+		&path,
+		&Source::Solid(SolidSource::from_unpremultiplied_argb(
+			color.0, color.1, color.2, color.3,
+		)),
+		&DrawOptions::new(),
+	);
+}
 
 impl DetectedPiece {
 	pub fn from_yolo_output(
@@ -191,7 +410,6 @@ impl DetectedPiece {
 		let scale_x = img_width as f32 / scale_factor;
 		let scale_y = img_height as f32 / scale_factor;
 
-		// Piece type mapping: 0: r, 1: n, 2: b, 3: q, 4: k, 5: p, 6: R, 7: N, 8: B, 9: Q, 10: K, 11: P
 		let piece_chars = ['r', 'n', 'b', 'q', 'k', 'p', 'R', 'N', 'B', 'Q', 'K', 'P'];
 		let mut pieces = Vec::new();
 

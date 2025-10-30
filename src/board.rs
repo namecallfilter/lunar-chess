@@ -1,5 +1,4 @@
-use crate::drawing::{DetectedBoard, DetectedPiece};
-// use shakmaty
+use crate::drawing::{BestMove, DetectedBoard, DetectedPiece};
 
 pub fn to_fen(board: &DetectedBoard, pieces: &[DetectedPiece]) -> String {
 	let mut chess_board = [[None; 8]; 8];
@@ -9,9 +8,34 @@ pub fn to_fen(board: &DetectedBoard, pieces: &[DetectedPiece]) -> String {
 			&& file < 8
 			&& rank < 8
 		{
+			if chess_board[rank as usize][file as usize].is_some() {
+				tracing::warn!(
+					"Duplicate piece detected at ({}, {}), keeping first one",
+					file,
+					rank
+				);
+				continue;
+			}
 			chess_board[rank as usize][file as usize] = Some(piece.piece_type);
 		}
 	}
+
+	let mut white_bottom = 0;
+	let mut white_top = 0;
+
+	for (rank_idx, row) in chess_board.iter().enumerate() {
+		for piece in row.iter().flatten() {
+			if piece.is_uppercase() {
+				if rank_idx < 4 {
+					white_top += 1;
+				} else {
+					white_bottom += 1;
+				}
+			}
+		}
+	}
+
+	let active_color = if white_bottom > white_top { "w" } else { "b" };
 
 	let mut fen = String::new();
 
@@ -42,6 +66,8 @@ pub fn to_fen(board: &DetectedBoard, pieces: &[DetectedPiece]) -> String {
 		}
 	}
 
+	fen.push_str(&format!(" {} - - 0 1", active_color));
+
 	tracing::debug!("Generated FEN: {}", fen);
 	fen
 }
@@ -66,13 +92,29 @@ pub fn piece_to_square(piece: &DetectedPiece, board: &DetectedBoard) -> Option<(
 	}
 }
 
-pub fn square_to_algebraic(file: u8, rank: u8) -> Option<String> {
-	if file >= 8 || rank >= 8 {
+pub fn parse_move(move_str: &str) -> Option<BestMove> {
+	let bytes = move_str.as_bytes();
+	if bytes.len() < 4 {
 		return None;
 	}
 
-	let file_char = (b'a' + file) as char;
-	let rank_char = (b'1' + rank) as char;
+	let from_file = bytes[0].checked_sub(b'a')?;
+	let from_rank_chess = bytes[1].checked_sub(b'1')?;
+	let to_file = bytes[2].checked_sub(b'a')?;
+	let to_rank_chess = bytes[3].checked_sub(b'1')?;
 
-	Some(format!("{}{}", file_char, rank_char))
+	if from_file >= 8 || from_rank_chess >= 8 || to_file >= 8 || to_rank_chess >= 8 {
+		return None;
+	}
+
+	let from_rank = 7 - from_rank_chess;
+	let to_rank = 7 - to_rank_chess;
+
+	Some(BestMove {
+		from_file,
+		from_rank,
+		to_file,
+		to_rank,
+		score: 0,
+	})
 }
