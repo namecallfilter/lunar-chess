@@ -1,5 +1,26 @@
 use crate::drawing::{BestMove, DetectedBoard, DetectedPiece};
 
+pub fn detect_board_orientation(board: &DetectedBoard, pieces: &[DetectedPiece]) -> bool {
+	let mut white_bottom = 0;
+	let mut white_top = 0;
+
+	let mid_y = board.y + board.height / 2.0;
+
+	for piece in pieces {
+		if piece.piece_type.is_uppercase() {
+			let piece_center_y = piece.y + piece.height / 2.0;
+
+			if piece_center_y > mid_y {
+				white_bottom += 1;
+			} else {
+				white_top += 1;
+			}
+		}
+	}
+
+	white_bottom > white_top
+}
+
 pub fn to_fen(board: &DetectedBoard, pieces: &[DetectedPiece]) -> String {
 	let mut chess_board = [[None; 8]; 8];
 
@@ -20,22 +41,14 @@ pub fn to_fen(board: &DetectedBoard, pieces: &[DetectedPiece]) -> String {
 		}
 	}
 
-	let mut white_bottom = 0;
-	let mut white_top = 0;
-
-	for (rank_idx, row) in chess_board.iter().enumerate() {
-		for piece in row.iter().flatten() {
-			if piece.is_uppercase() {
-				if rank_idx < 4 {
-					white_top += 1;
-				} else {
-					white_bottom += 1;
-				}
-			}
+	if !board.playing_as_white {
+		chess_board.reverse();
+		for row in chess_board.iter_mut() {
+			row.reverse();
 		}
 	}
 
-	let active_color = if white_bottom > white_top { "w" } else { "b" };
+	let active_color = if board.playing_as_white { "w" } else { "b" };
 
 	let mut fen = String::new();
 
@@ -92,7 +105,7 @@ pub fn piece_to_square(piece: &DetectedPiece, board: &DetectedBoard) -> Option<(
 	}
 }
 
-pub fn parse_move(move_str: &str) -> Option<BestMove> {
+pub fn parse_move(move_str: &str, playing_as_white: bool) -> Option<BestMove> {
 	let bytes = move_str.as_bytes();
 	if bytes.len() < 4 {
 		return None;
@@ -107,13 +120,22 @@ pub fn parse_move(move_str: &str) -> Option<BestMove> {
 		return None;
 	}
 
-	let from_rank = 7 - from_rank_chess;
-	let to_rank = 7 - to_rank_chess;
+	let (from_rank, to_rank) = if playing_as_white {
+		(7 - from_rank_chess, 7 - to_rank_chess)
+	} else {
+		(from_rank_chess, to_rank_chess)
+	};
+
+	let (from_file_final, to_file_final) = if playing_as_white {
+		(from_file, to_file)
+	} else {
+		(7 - from_file, 7 - to_file)
+	};
 
 	Some(BestMove {
-		from_file,
+		from_file: from_file_final,
 		from_rank,
-		to_file,
+		to_file: to_file_final,
 		to_rank,
 		score: 0,
 	})

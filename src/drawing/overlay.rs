@@ -55,6 +55,7 @@ pub struct BoardBounds {
 	pub y: f32,
 	pub width: f32,
 	pub height: f32,
+	pub playing_as_white: bool,
 }
 
 impl OverlayWindow {
@@ -118,6 +119,7 @@ impl OverlayWindow {
 							width: bounds.width,
 							height: bounds.height,
 							confidence: 1.0,
+							playing_as_white: bounds.playing_as_white,
 						},
 						best_move.from_file,
 						best_move.from_rank,

@@ -35,9 +35,8 @@ impl StockfishWrapper {
 			.setup_for_new_game()
 			.context("Failed to setup Stockfish for new game")?;
 
-		// Configure Stockfish
-		engine.set_depth(12); // Good balance of speed and accuracy
-		engine.set_option("MultiPV", &MULTI_PV.to_string())?; // Get top N moves
+		engine.set_depth(12);
+		engine.set_option("MultiPV", &MULTI_PV.to_string())?;
 
 		tracing::info!("Stockfish engine started successfully");
 

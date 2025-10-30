@@ -10,6 +10,7 @@ pub struct DetectedBoard {
 	pub width: f32,
 	pub height: f32,
 	pub confidence: f32,
+	pub playing_as_white: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -61,6 +62,7 @@ impl DetectedBoard {
 					width: w,
 					height: h,
 					confidence,
+					playing_as_white: true,
 				});
 				max_confidence = confidence;
 			}

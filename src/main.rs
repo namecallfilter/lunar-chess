@@ -109,7 +109,11 @@ fn main() -> Result<()> {
 										let best_moves: Vec<drawing::BestMove> = moves_with_scores
 											.iter()
 											.filter_map(|m| {
-												board::parse_move(&m.move_str).map(|mut mv| {
+												board::parse_move(
+													&m.move_str,
+													board.playing_as_white,
+												)
+												.map(|mut mv| {
 													mv.score = m.score;
 													mv
 												})
@@ -236,6 +240,16 @@ fn main() -> Result<()> {
 				}
 			};
 
+			let mut board = board;
+			if !pieces.is_empty() {
+				let playing_as_white = board::detect_board_orientation(&board, &pieces);
+				board.playing_as_white = playing_as_white;
+				tracing::debug!(
+					"Board orientation: playing as {}",
+					if playing_as_white { "white" } else { "black" }
+				);
+			}
+
 			if !pieces.is_empty() && pieces.len() <= 32 {
 				let mut fen_lock = current_fen.lock().unwrap();
 				*fen_lock = Some((board.clone(), pieces.clone()));
@@ -247,6 +261,7 @@ fn main() -> Result<()> {
 				y: board.y,
 				width: board.width,
 				height: board.height,
+				playing_as_white: board.playing_as_white,
 			};
 
 			if let Err(e) = proxy.send_event(UserEvent::UpdateDetections(Some(bounds), pieces)) {
