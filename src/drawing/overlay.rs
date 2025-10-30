@@ -23,6 +23,7 @@ use crate::drawing::board::{
 pub enum UserEvent {
 	UpdateDetections(Option<BoardBounds>, Vec<DetectedPiece>),
 	UpdateBestMoves(Vec<BestMove>),
+	#[allow(dead_code)]
 	Tick,
 }
 

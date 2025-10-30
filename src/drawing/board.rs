@@ -158,6 +158,7 @@ pub fn draw_move_arrow(
 	}
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_straight_arrow(
 	dt: &mut DrawTarget, from_x: f32, from_y: f32, to_x: f32, to_y: f32, cell_width: f32,
 	cell_height: f32, color: (u8, u8, u8, u8),
@@ -237,6 +238,7 @@ fn draw_straight_arrow(
 	);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_knight_arrow(
 	dt: &mut DrawTarget, board: &DetectedBoard, from_file: u8, from_rank: u8, to_file: u8,
 	to_rank: u8, color: (u8, u8, u8, u8),
