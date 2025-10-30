@@ -10,10 +10,46 @@ use ort::{
 
 use crate::drawing::{DetectedBoard, DetectedPiece};
 
+const BOARD_MODEL_PATH: &str = "models/board.onnx";
+const PIECE_MODEL_PATH: &str = "models/piece.onnx";
+
+const YOLO_TARGET_SIZE: u32 = 640;
+
+const BOARD_CONFIDENCE_THRESHOLD: f32 = 0.75;
+const PIECE_CONFIDENCE_THRESHOLD: f32 = 0.6;
+
+// const NMS_IOU_THRESHOLD: f32 = 0.45;
+
+pub const MAX_PIECES: usize = 32;
+
+const ONNX_INTRA_THREADS: usize = 4;
+
+/// FEN notation for piece types (lowercase = black, uppercase = white)
+/// Order: rook, knight, bishop, queen, king, pawn (black), then white
+pub const PIECE_CHARS: [char; 12] = ['r', 'n', 'b', 'q', 'k', 'p', 'R', 'N', 'B', 'Q', 'K', 'P'];
+
+struct ImageBuffers {
+	tensor_array: Array4<f32>,
+}
+
+impl ImageBuffers {
+	fn new() -> Self {
+		Self {
+			tensor_array: Array4::<f32>::zeros((
+				1,
+				3,
+				YOLO_TARGET_SIZE as usize,
+				YOLO_TARGET_SIZE as usize,
+			)),
+		}
+	}
+}
+
 pub struct ChessDetector {
 	board_model: Session,
 	piece_model: Session,
 	resizer: Resizer,
+	buffers: ImageBuffers,
 }
 
 impl ChessDetector {
@@ -23,15 +59,15 @@ impl ChessDetector {
 		let board_model = Session::builder()?
 			.with_execution_providers([CUDAExecutionProvider::default().build()])?
 			.with_optimization_level(GraphOptimizationLevel::Level3)?
-			.with_intra_threads(4)?
-			.commit_from_file("models/board.onnx")
+			.with_intra_threads(ONNX_INTRA_THREADS)?
+			.commit_from_file(BOARD_MODEL_PATH)
 			.context("Failed to load board detection model")?;
 
 		let piece_model = Session::builder()?
 			.with_execution_providers([CUDAExecutionProvider::default().build()])?
 			.with_optimization_level(GraphOptimizationLevel::Level3)?
-			.with_intra_threads(4)?
-			.commit_from_file("models/piece.onnx")
+			.with_intra_threads(ONNX_INTRA_THREADS)?
+			.commit_from_file(PIECE_MODEL_PATH)
 			.context("Failed to load piece detection model")?;
 
 		tracing::info!("Chess detection models loaded successfully");
@@ -40,6 +76,7 @@ impl ChessDetector {
 			board_model,
 			piece_model,
 			resizer: Resizer::new(),
+			buffers: ImageBuffers::new(),
 		})
 	}
 
@@ -48,7 +85,6 @@ impl ChessDetector {
 
 		let original_width = image.width();
 		let original_height = image.height();
-		let target_size = 640u32;
 
 		let resize_start = std::time::Instant::now();
 		let mut raw_buf = image.as_raw().clone();
@@ -59,21 +95,21 @@ impl ChessDetector {
 			PixelType::U8x4,
 		)?;
 
-		let mut dst_image = Image::new(target_size, target_size, PixelType::U8x4);
+		let mut dst_image = Image::new(YOLO_TARGET_SIZE, YOLO_TARGET_SIZE, PixelType::U8x4);
 		self.resizer.resize(&src_image, &mut dst_image, None)?;
 
-		let resized = RgbaImage::from_raw(target_size, target_size, dst_image.into_vec())
+		let resized = RgbaImage::from_raw(YOLO_TARGET_SIZE, YOLO_TARGET_SIZE, dst_image.into_vec())
 			.context("Failed to create resized image")?;
 		tracing::trace!("Board image resize took {:?}", resize_start.elapsed());
 
 		let tensor_start = std::time::Instant::now();
-		let array = image_to_tensor(&resized);
+		image_to_tensor_inplace(&resized, &mut self.buffers.tensor_array);
 		tracing::trace!("Board tensor conversion took {:?}", tensor_start.elapsed());
 
 		let inference_start = std::time::Instant::now();
-		let board_outputs = self
-			.board_model
-			.run(ort::inputs!["images" => TensorRef::from_array_view(&array)?])?;
+		let board_outputs = self.board_model.run(
+			ort::inputs!["images" => TensorRef::from_array_view(self.buffers.tensor_array.view())?],
+		)?;
 		tracing::trace!("Board inference took {:?}", inference_start.elapsed());
 
 		let extract_start = std::time::Instant::now();
@@ -86,7 +122,7 @@ impl ChessDetector {
 			&predictions_view,
 			original_width,
 			original_height,
-			0.75,
+			BOARD_CONFIDENCE_THRESHOLD,
 		);
 		tracing::trace!("Board result parsing took {:?}", parse_start.elapsed());
 
@@ -117,21 +153,22 @@ impl ChessDetector {
 		let src_image =
 			Image::from_slice_u8(width, height, raw_buf.as_mut_slice(), PixelType::U8x4)?;
 
-		let mut dst_image = Image::new(640, 640, PixelType::U8x4);
+		let mut dst_image = Image::new(YOLO_TARGET_SIZE, YOLO_TARGET_SIZE, PixelType::U8x4);
 		self.resizer.resize(&src_image, &mut dst_image, None)?;
 
-		let warped_board = RgbaImage::from_raw(640, 640, dst_image.into_vec())
-			.context("Failed to create warped board image")?;
+		let warped_board =
+			RgbaImage::from_raw(YOLO_TARGET_SIZE, YOLO_TARGET_SIZE, dst_image.into_vec())
+				.context("Failed to create warped board image")?;
 		tracing::trace!("Piece image resize took {:?}", resize_start.elapsed());
 
 		let tensor_start = std::time::Instant::now();
-		let warped_array = image_to_tensor(&warped_board);
+		image_to_tensor_inplace(&warped_board, &mut self.buffers.tensor_array);
 		tracing::trace!("Piece tensor conversion took {:?}", tensor_start.elapsed());
 
 		let inference_start = std::time::Instant::now();
-		let piece_outputs = self
-			.piece_model
-			.run(ort::inputs!["images" => TensorRef::from_array_view(&warped_array)?])?;
+		let piece_outputs = self.piece_model.run(
+			ort::inputs!["images" => TensorRef::from_array_view(self.buffers.tensor_array.view())?],
+		)?;
 		tracing::trace!("Piece inference took {:?}", inference_start.elapsed());
 
 		let extract_start = std::time::Instant::now();
@@ -140,11 +177,15 @@ impl ChessDetector {
 
 		let parse_start = std::time::Instant::now();
 		let piece_predictions_view = piece_predictions.view();
-		let detected_pieces_warped =
-			DetectedPiece::from_yolo_output(&piece_predictions_view, 640, 640, 0.75);
+		let detected_pieces_warped = DetectedPiece::from_yolo_output(
+			&piece_predictions_view,
+			YOLO_TARGET_SIZE,
+			YOLO_TARGET_SIZE,
+			PIECE_CONFIDENCE_THRESHOLD,
+		);
 
-		let scale_x = board.width / 640.0;
-		let scale_y = board.height / 640.0;
+		let scale_x = board.width / YOLO_TARGET_SIZE as f32;
+		let scale_y = board.height / YOLO_TARGET_SIZE as f32;
 
 		let detected_pieces: Vec<DetectedPiece> = detected_pieces_warped
 			.into_iter()
@@ -164,10 +205,7 @@ impl ChessDetector {
 	}
 }
 
-fn image_to_tensor(image: &RgbaImage) -> Array4<f32> {
-	let (width, height) = (image.width() as usize, image.height() as usize);
-	let mut array = Array4::<f32>::zeros((1, 3, height, width));
-
+fn image_to_tensor_inplace(image: &RgbaImage, array: &mut Array4<f32>) {
 	for (x, y, pixel) in image.enumerate_pixels() {
 		let xi = x as usize;
 		let yi = y as usize;
@@ -176,6 +214,4 @@ fn image_to_tensor(image: &RgbaImage) -> Array4<f32> {
 		array[[0, 1, yi, xi]] = channels[1] as f32 / 255.0;
 		array[[0, 2, yi, xi]] = channels[2] as f32 / 255.0;
 	}
-
-	array
 }

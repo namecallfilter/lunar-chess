@@ -1,11 +1,23 @@
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 
-const STOCKFISH_URL: &str = "https://github.com/official-stockfish/Stockfish/releases/latest/download/stockfish-windows-x86-64-avx2.zip";
-const STOCKFISH_PATH: &str = "models/stockfish.exe";
+use crate::error::AnalysisError;
+
 const MODELS_DIR: &str = "models";
-const MULTI_PV: usize = 3;
+const STOCKFISH_PATH: &str = "models/stockfish.exe";
+
+const STOCKFISH_DOWNLOAD_URL: &str = "https://github.com/official-stockfish/Stockfish/releases/latest/download/stockfish-windows-x86-64-avx2.zip";
+
+const STOCKFISH_DEPTH: u32 = 12;
+const STOCKFISH_MULTI_PV: usize = 3;
+
+const MATE_SCORE_BASE: i32 = 10000;
+const MATE_DISTANCE_PENALTY: i32 = 10;
+
+// TODO: Check if fen is checkmate
+// TODO: When downloading put the version of stockfish in the name for updating
+// TODO: Support mac and linux stockfish
 
 #[derive(Debug, Clone)]
 pub struct MoveWithScore {
@@ -17,10 +29,6 @@ pub struct StockfishWrapper {
 	engine: stockfish::Stockfish,
 }
 
-// TODO: Check if fen is checkmate
-// TODO: When downloading put the version of stockfish in the name for updating
-// TODO: Support mac and linux stockfish
-
 impl StockfishWrapper {
 	pub fn new() -> Result<Self> {
 		Self::ensure_downloaded()?;
@@ -29,14 +37,19 @@ impl StockfishWrapper {
 		tracing::info!("Starting Stockfish engine...");
 
 		let mut engine = stockfish::Stockfish::new(STOCKFISH_PATH)
-			.context("Failed to start Stockfish engine")?;
+			.map_err(|e| AnalysisError::EngineStartFailed(e.to_string()))?;
 
 		engine
 			.setup_for_new_game()
-			.context("Failed to setup Stockfish for new game")?;
+			.map_err(|e| AnalysisError::EngineInitFailed(e.to_string()))?;
 
-		engine.set_depth(12);
-		engine.set_option("MultiPV", &MULTI_PV.to_string())?;
+		engine.set_depth(STOCKFISH_DEPTH);
+		engine
+			.set_option("MultiPV", &STOCKFISH_MULTI_PV.to_string())
+			.map_err(|_e| AnalysisError::EngineOptionFailed {
+				option: "MultiPV".to_string(),
+				value: STOCKFISH_MULTI_PV.to_string(),
+			})?;
 
 		tracing::info!("Stockfish engine started successfully");
 
@@ -51,7 +64,9 @@ impl StockfishWrapper {
 
 		tracing::info!("Stockfish not found, downloading...");
 
-		std::fs::create_dir_all(MODELS_DIR).context("Failed to create models directory")?;
+		std::fs::create_dir_all(MODELS_DIR).map_err(|e| {
+			AnalysisError::IoError(format!("Failed to create models directory: {}", e))
+		})?;
 
 		Self::download()?;
 
@@ -59,51 +74,67 @@ impl StockfishWrapper {
 	}
 
 	fn download() -> Result<()> {
-		tracing::info!("Downloading Stockfish from {}", STOCKFISH_URL);
+		tracing::info!("Downloading Stockfish from {}", STOCKFISH_DOWNLOAD_URL);
 
-		let response =
-			reqwest::blocking::get(STOCKFISH_URL).context("Failed to download Stockfish")?;
+		let response = reqwest::blocking::get(STOCKFISH_DOWNLOAD_URL).map_err(|e| {
+			AnalysisError::DownloadFailed {
+				url: STOCKFISH_DOWNLOAD_URL.to_string(),
+				reason: e.to_string(),
+			}
+		})?;
 
 		if !response.status().is_success() {
-			bail!("Failed to download Stockfish: HTTP {}", response.status());
+			return Err(AnalysisError::DownloadFailed {
+				url: STOCKFISH_DOWNLOAD_URL.to_string(),
+				reason: format!("HTTP {}", response.status()),
+			}
+			.into());
 		}
 
 		let bytes = response
 			.bytes()
-			.context("Failed to read Stockfish download")?;
+			.map_err(|e| AnalysisError::NetworkError(e.to_string()))?;
 
 		tracing::info!("Downloaded {} bytes, extracting...", bytes.len());
 
 		let cursor = std::io::Cursor::new(bytes);
-		let mut archive = zip::ZipArchive::new(cursor).context("Failed to open ZIP archive")?;
+		let mut archive = zip::ZipArchive::new(cursor)
+			.map_err(|e| AnalysisError::ExtractionFailed(format!("Failed to open ZIP: {}", e)))?;
 
 		for i in 0..archive.len() {
-			let mut file = archive.by_index(i).context("Failed to read ZIP entry")?;
+			let mut file = archive.by_index(i).map_err(|e| {
+				AnalysisError::ExtractionFailed(format!("Failed to read ZIP entry: {}", e))
+			})?;
 			let file_name = file.name().to_string();
 
 			if file_name.to_lowercase().contains("stockfish") && file_name.ends_with(".exe") {
 				tracing::info!("Extracting {} to {}", file_name, STOCKFISH_PATH);
 
 				let mut buffer = Vec::new();
-				std::io::copy(&mut file, &mut buffer)
-					.context("Failed to extract Stockfish binary")?;
+				std::io::copy(&mut file, &mut buffer).map_err(|e| {
+					AnalysisError::ExtractionFailed(format!("Failed to extract binary: {}", e))
+				})?;
 
-				std::fs::write(STOCKFISH_PATH, buffer)
-					.context("Failed to write Stockfish binary")?;
+				std::fs::write(STOCKFISH_PATH, buffer).map_err(|e| {
+					AnalysisError::IoError(format!("Failed to write Stockfish binary: {}", e))
+				})?;
 
 				tracing::info!("Stockfish downloaded and extracted successfully");
 				return Ok(());
 			}
 		}
 
-		bail!("Stockfish executable not found in downloaded archive");
+		Err(AnalysisError::ExecutableNotFoundInArchive.into())
 	}
 
 	pub fn set_position(&mut self, fen: &str) -> Result<()> {
-		self.engine
-			.set_fen_position(fen)
-			.context("Failed to set FEN position")?;
-		Ok(())
+		self.engine.set_fen_position(fen).map_err(|e| {
+			AnalysisError::InvalidPosition {
+				fen: fen.to_string(),
+				reason: e.to_string(),
+			}
+			.into()
+		})
 	}
 
 	pub fn get_best_moves(&mut self) -> Result<Vec<MoveWithScore>> {
@@ -112,7 +143,7 @@ impl StockfishWrapper {
 		let output = self
 			.engine
 			.go_multipv()
-			.context("Failed to get engine output")?;
+			.map_err(|e| AnalysisError::AnalysisFailed(e.to_string()))?;
 
 		let mut best_moves = std::collections::HashMap::new();
 
@@ -123,9 +154,9 @@ impl StockfishWrapper {
 					stockfish::EvalType::Centipawn => eval.value(),
 					stockfish::EvalType::Mate => {
 						if eval.value() > 0 {
-							10000 - eval.value().abs() * 10
+							MATE_SCORE_BASE - eval.value().abs() * MATE_DISTANCE_PENALTY
 						} else {
-							-10000 + eval.value().abs() * 10
+							-MATE_SCORE_BASE + eval.value().abs() * MATE_DISTANCE_PENALTY
 						}
 					}
 				};
@@ -148,7 +179,7 @@ impl StockfishWrapper {
 
 		moves.sort_by(|a, b| b.score.cmp(&a.score));
 
-		moves.truncate(MULTI_PV);
+		moves.truncate(STOCKFISH_MULTI_PV);
 
 		Ok(moves)
 	}

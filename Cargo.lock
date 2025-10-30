@@ -1134,7 +1134,7 @@ dependencies = [
  "image",
  "num-traits",
  "rayon",
- "thiserror 2.0.12",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -2062,7 +2062,7 @@ dependencies = [
  "khronos-egl",
  "memmap2",
  "rustix 1.0.7",
- "thiserror 2.0.12",
+ "thiserror 2.0.17",
  "tracing",
  "wayland-backend",
  "wayland-client",
@@ -2138,6 +2138,7 @@ dependencies = [
  "reqwest",
  "softbuffer",
  "stockfish",
+ "thiserror 2.0.17",
  "tracing",
  "tracing-subscriber",
  "windows 0.62.2",
@@ -3501,7 +3502,7 @@ checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
 dependencies = [
  "getrandom 0.2.16",
  "libredox",
- "thiserror 2.0.12",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -4014,7 +4015,7 @@ name = "stockfish"
 version = "0.2.11"
 dependencies = [
  "interactive_process",
- "thiserror 2.0.12",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -4141,11 +4142,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.12"
+version = "2.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "567b8a2dae586314f7be2a752ec7474332959c6460e02bde30d702a66d488708"
+checksum = "f63587ca0f12b72a0600bcba1d40081f830876000bb46dd2337a3051618f4fc8"
 dependencies = [
- "thiserror-impl 2.0.12",
+ "thiserror-impl 2.0.17",
 ]
 
 [[package]]
@@ -4161,9 +4162,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.12"
+version = "2.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f7cf42b4507d8ea322120659672cf1b9dbb93f8f2d4ecfd6e51350ff5b17a1d"
+checksum = "3ff15c8ecd7de3849db632e14d18d2571fa09dfc5ed93479bc4485c7a517c913"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5478,7 +5479,7 @@ dependencies = [
  "rand 0.9.1",
  "scopeguard",
  "serde",
- "thiserror 2.0.12",
+ "thiserror 2.0.17",
  "url",
  "widestring",
  "windows 0.61.1",

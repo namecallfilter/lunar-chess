@@ -3,6 +3,77 @@ use raqote::{
 	DrawOptions, DrawTarget, PathBuilder, Point, SolidSource, Source, StrokeStyle, Transform,
 };
 
+const BOARD_OUTLINE_WIDTH: f32 = 4.0;
+const GRID_LINE_WIDTH: f32 = 1.5;
+
+const ARROW_SHAFT_WIDTH_FRACTION: f32 = 0.25;
+const ARROW_HEAD_LENGTH_FRACTION: f32 = 0.5;
+const ARROW_HEAD_WIDTH_MULTIPLIER: f32 = 2.5;
+const ARROW_MARGIN_FRACTION: f32 = 0.3;
+
+const PIECE_LABEL_SIZE: f32 = 30.0;
+const PIECE_LABEL_FONT_SIZE: f32 = 24.0;
+
+const PIECE_LABEL_OFFSET_X: f32 = 5.0;
+const PIECE_LABEL_OFFSET_Y: f32 = 23.0;
+
+const COLOR_BOARD_OUTLINE: (u8, u8, u8, u8) = (255, 0, 255, 0); // Green
+const COLOR_GRID_LINES: (u8, u8, u8, u8) = (200, 255, 255, 0); // Yellow
+const COLOR_LABEL_BACKGROUND: (u8, u8, u8, u8) = (180, 50, 50, 50); // Dark gray
+const COLOR_LABEL_WHITE_PIECE: (u8, u8, u8, u8) = (255, 255, 255, 255); // White
+const COLOR_LABEL_BLACK_PIECE: (u8, u8, u8, u8) = (255, 200, 200, 200); // Light gray
+
+const NMS_IOU_THRESHOLD: f32 = 0.45;
+
+mod cached_colors {
+	use super::*;
+
+	pub fn board_outline() -> Source<'static> {
+		Source::Solid(SolidSource::from_unpremultiplied_argb(
+			COLOR_BOARD_OUTLINE.0,
+			COLOR_BOARD_OUTLINE.1,
+			COLOR_BOARD_OUTLINE.2,
+			COLOR_BOARD_OUTLINE.3,
+		))
+	}
+
+	pub fn grid_lines() -> Source<'static> {
+		Source::Solid(SolidSource::from_unpremultiplied_argb(
+			COLOR_GRID_LINES.0,
+			COLOR_GRID_LINES.1,
+			COLOR_GRID_LINES.2,
+			COLOR_GRID_LINES.3,
+		))
+	}
+
+	pub fn label_background() -> Source<'static> {
+		Source::Solid(SolidSource::from_unpremultiplied_argb(
+			COLOR_LABEL_BACKGROUND.0,
+			COLOR_LABEL_BACKGROUND.1,
+			COLOR_LABEL_BACKGROUND.2,
+			COLOR_LABEL_BACKGROUND.3,
+		))
+	}
+
+	pub fn label_white_piece() -> SolidSource {
+		SolidSource::from_unpremultiplied_argb(
+			COLOR_LABEL_WHITE_PIECE.0,
+			COLOR_LABEL_WHITE_PIECE.1,
+			COLOR_LABEL_WHITE_PIECE.2,
+			COLOR_LABEL_WHITE_PIECE.3,
+		)
+	}
+
+	pub fn label_black_piece() -> SolidSource {
+		SolidSource::from_unpremultiplied_argb(
+			COLOR_LABEL_BLACK_PIECE.0,
+			COLOR_LABEL_BLACK_PIECE.1,
+			COLOR_LABEL_BLACK_PIECE.2,
+			COLOR_LABEL_BLACK_PIECE.3,
+		)
+	}
+}
+
 #[derive(Clone, Debug)]
 pub struct DetectedBoard {
 	pub x: f32,
@@ -13,17 +84,12 @@ pub struct DetectedBoard {
 	pub playing_as_white: bool,
 }
 
-#[derive(Clone, Debug)]
-pub struct DetectedPiece {
-	pub x: f32,
-	pub y: f32,
-	pub width: f32,
-	pub height: f32,
-	pub piece_type: char,
-	pub confidence: f32,
-}
-
 impl DetectedBoard {
+	#[inline]
+	pub fn cell_size(&self) -> (f32, f32) {
+		(self.width / 8.0, self.height / 8.0)
+	}
+
 	pub fn from_yolo_output(
 		predictions: &ndarray::ArrayViewD<f32>, img_width: u32, img_height: u32,
 		confidence_threshold: f32,
@@ -72,19 +138,29 @@ impl DetectedBoard {
 	}
 }
 
+#[derive(Clone, Debug)]
+pub struct DetectedPiece {
+	pub x: f32,
+	pub y: f32,
+	pub width: f32,
+	pub height: f32,
+	pub piece_type: char,
+	pub confidence: f32,
+}
+
 pub fn draw_board_outline(dt: &mut DrawTarget, x: f32, y: f32, width: f32, height: f32) {
 	let mut pb = PathBuilder::new();
 	pb.rect(x, y, width, height);
 	let path = pb.finish();
 
 	let stroke_style = StrokeStyle {
-		width: 4.0,
+		width: BOARD_OUTLINE_WIDTH,
 		..Default::default()
 	};
 
 	dt.stroke(
 		&path,
-		&Source::Solid(SolidSource::from_unpremultiplied_argb(255, 0, 255, 0)),
+		&cached_colors::board_outline(),
 		&stroke_style,
 		&DrawOptions::new(),
 	);
@@ -95,11 +171,11 @@ pub fn draw_chess_grid(dt: &mut DrawTarget, x: f32, y: f32, width: f32, height: 
 	let cell_height = height / 8.0;
 
 	let stroke_style = StrokeStyle {
-		width: 1.5,
+		width: GRID_LINE_WIDTH,
 		..Default::default()
 	};
 
-	let grid_color = Source::Solid(SolidSource::from_unpremultiplied_argb(200, 255, 255, 0));
+	let grid_color = cached_colors::grid_lines();
 
 	for i in 1..8 {
 		let mut pb = PathBuilder::new();
@@ -130,8 +206,7 @@ pub fn draw_move_arrow(
 		return;
 	}
 
-	let cell_width = board.width / 8.0;
-	let cell_height = board.height / 8.0;
+	let (cell_width, cell_height) = board.cell_size();
 
 	let from_x = board.x + (from_file as f32 + 0.5) * cell_width;
 	let from_y = board.y + (from_rank as f32 + 0.5) * cell_height;
@@ -174,11 +249,11 @@ fn draw_straight_arrow(
 	let norm_dx = dx / length;
 	let norm_dy = dy / length;
 
-	let arrow_width = cell_width.min(cell_height) * 0.25;
-	let arrow_head_length = cell_width.min(cell_height) * 0.5;
-	let arrow_head_width = arrow_width * 2.5;
+	let arrow_width = cell_width.min(cell_height) * ARROW_SHAFT_WIDTH_FRACTION;
+	let arrow_head_length = cell_width.min(cell_height) * ARROW_HEAD_LENGTH_FRACTION;
+	let arrow_head_width = arrow_width * ARROW_HEAD_WIDTH_MULTIPLIER;
 
-	let margin = cell_width.min(cell_height) * 0.3;
+	let margin = cell_width.min(cell_height) * ARROW_MARGIN_FRACTION;
 	let shaft_start_x = from_x + norm_dx * margin;
 	let shaft_start_y = from_y + norm_dy * margin;
 
@@ -243,8 +318,7 @@ fn draw_knight_arrow(
 	dt: &mut DrawTarget, board: &DetectedBoard, from_file: u8, from_rank: u8, to_file: u8,
 	to_rank: u8, color: (u8, u8, u8, u8),
 ) {
-	let cell_width = board.width / 8.0;
-	let cell_height = board.height / 8.0;
+	let (cell_width, cell_height) = board.cell_size();
 
 	let from_x = board.x + (from_file as f32 + 0.5) * cell_width;
 	let from_y = board.y + (from_rank as f32 + 0.5) * cell_height;
@@ -258,10 +332,10 @@ fn draw_knight_arrow(
 
 	let mid_y = if rank_diff == 2 { to_y } else { from_y };
 
-	let arrow_width = cell_width.min(cell_height) * 0.25;
-	let arrow_head_length = cell_width.min(cell_height) * 0.5;
-	let arrow_head_width = arrow_width * 2.5;
-	let margin = cell_width.min(cell_height) * 0.3;
+	let arrow_width = cell_width.min(cell_height) * ARROW_SHAFT_WIDTH_FRACTION;
+	let arrow_head_length = cell_width.min(cell_height) * ARROW_HEAD_LENGTH_FRACTION;
+	let arrow_head_width = arrow_width * ARROW_HEAD_WIDTH_MULTIPLIER;
+	let margin = cell_width.min(cell_height) * ARROW_MARGIN_FRACTION;
 
 	let dx1 = mid_x - from_x;
 	let dy1 = mid_y - from_y;
@@ -414,7 +488,6 @@ impl DetectedPiece {
 		let scale_x = img_width as f32 / scale_factor;
 		let scale_y = img_height as f32 / scale_factor;
 
-		let piece_chars = ['r', 'n', 'b', 'q', 'k', 'p', 'R', 'N', 'B', 'Q', 'K', 'P'];
 		let mut pieces = Vec::new();
 
 		for i in 0..num_detections {
@@ -445,13 +518,13 @@ impl DetectedPiece {
 					y,
 					width: w,
 					height: h,
-					piece_type: piece_chars[max_class_idx],
+					piece_type: crate::detection::PIECE_CHARS[max_class_idx],
 					confidence: max_class_conf,
 				});
 			}
 		}
 
-		nms_pieces(pieces, 0.45)
+		nms_pieces(pieces, NMS_IOU_THRESHOLD)
 	}
 }
 
@@ -460,17 +533,15 @@ fn nms_pieces(mut pieces: Vec<DetectedPiece>, iou_threshold: f32) -> Vec<Detecte
 		return pieces;
 	}
 
-	pieces.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+	pieces.sort_unstable_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
 
-	let mut keep = Vec::new();
+	let mut keep = Vec::with_capacity(pieces.len());
 	let mut suppressed = vec![false; pieces.len()];
 
 	for i in 0..pieces.len() {
 		if suppressed[i] {
 			continue;
 		}
-
-		keep.push(pieces[i].clone());
 
 		for j in (i + 1)..pieces.len() {
 			if suppressed[j] {
@@ -482,6 +553,8 @@ fn nms_pieces(mut pieces: Vec<DetectedPiece>, iou_threshold: f32) -> Vec<Detecte
 				suppressed[j] = true;
 			}
 		}
+
+		keep.push(pieces[i].clone());
 	}
 
 	keep
@@ -524,29 +597,31 @@ pub fn draw_piece_labels(dt: &mut DrawTarget, pieces: &[DetectedPiece]) {
 
 	for piece in pieces {
 		let mut pb = PathBuilder::new();
-		let label_size = 30.0;
-		pb.rect(piece.x, piece.y, label_size, label_size);
+		pb.rect(piece.x, piece.y, PIECE_LABEL_SIZE, PIECE_LABEL_SIZE);
 		let path = pb.finish();
 
 		dt.fill(
 			&path,
-			&Source::Solid(SolidSource::from_unpremultiplied_argb(180, 50, 50, 50)),
+			&cached_colors::label_background(),
 			&DrawOptions::new(),
 		);
 
 		let text = piece.piece_type.to_string();
 		let color = if piece.piece_type.is_uppercase() {
-			SolidSource::from_unpremultiplied_argb(255, 255, 255, 255)
+			cached_colors::label_white_piece()
 		} else {
-			SolidSource::from_unpremultiplied_argb(255, 200, 200, 200)
+			cached_colors::label_black_piece()
 		};
 
 		dt.set_transform(&Transform::identity());
 		dt.draw_text(
 			&font,
-			24.0,
+			PIECE_LABEL_FONT_SIZE,
 			&text,
-			Point::new(piece.x + 5.0, piece.y + 23.0),
+			Point::new(
+				piece.x + PIECE_LABEL_OFFSET_X,
+				piece.y + PIECE_LABEL_OFFSET_Y,
+			),
 			&Source::Solid(color),
 			&DrawOptions::new(),
 		);

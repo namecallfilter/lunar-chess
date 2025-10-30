@@ -19,6 +19,15 @@ use crate::drawing::board::{
 	draw_piece_labels,
 };
 
+const DEFAULT_SCREEN_WIDTH: u32 = 1920;
+const DEFAULT_SCREEN_HEIGHT: u32 = 1080;
+
+const UI_REDRAW_INTERVAL_MS: u64 = 100;
+
+const ARROW_BASE_OPACITY: u8 = 200;
+const ARROW_OPACITY_STEP: u8 = 60;
+const COLOR_ARROW_BASE: (u8, u8, u8) = (100, 150, 255); // Blue
+
 #[derive(Debug, Clone)]
 pub enum UserEvent {
 	UpdateDetections(Option<BoardBounds>, Vec<DetectedPiece>),
@@ -69,8 +78,8 @@ impl OverlayWindow {
 			board_bounds: None,
 			pieces: Vec::new(),
 			best_moves: Vec::new(),
-			screen_width: 1920,
-			screen_height: 1080,
+			screen_width: DEFAULT_SCREEN_WIDTH,
+			screen_height: DEFAULT_SCREEN_HEIGHT,
 			should_redraw: false,
 			last_tick: Instant::now(),
 		}
@@ -103,14 +112,15 @@ impl OverlayWindow {
 
 			if !self.best_moves.is_empty() {
 				for (index, best_move) in self.best_moves.iter().enumerate() {
-					let opacity = match index {
-						0 => 255,
-						1 => 180,
-						2 => 110,
-						_ => 80,
-					};
+					let opacity =
+						ARROW_BASE_OPACITY.saturating_sub((index as u8) * ARROW_OPACITY_STEP);
 
-					let arrow_color = (opacity, 100, 150, 255);
+					let arrow_color = (
+						opacity,
+						COLOR_ARROW_BASE.0,
+						COLOR_ARROW_BASE.1,
+						COLOR_ARROW_BASE.2,
+					);
 
 					draw_move_arrow(
 						dt,
@@ -170,7 +180,7 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 	}
 
 	fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-		if self.last_tick.elapsed() >= Duration::from_millis(100) {
+		if self.last_tick.elapsed() >= Duration::from_millis(UI_REDRAW_INTERVAL_MS) {
 			self.last_tick = Instant::now();
 			if let Some(window) = &self.window {
 				window.request_redraw();

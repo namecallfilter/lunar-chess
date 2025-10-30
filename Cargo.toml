@@ -8,6 +8,7 @@ members = ["stockfish"]
 
 [dependencies]
 anyhow = "1.0.100"
+thiserror = "2.0.17"
 fast_image_resize = { version = "5.3", features = ["image", "rayon"] }
 font-kit = "0.14.3"
 image = "0.25.8"
