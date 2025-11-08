@@ -42,35 +42,11 @@ pub enum DetectionError {
 
 #[derive(Error, Debug)]
 pub enum AnalysisError {
-	#[error("Failed to download Stockfish from '{url}': {reason}")]
-	DownloadFailed { url: String, reason: String },
-
-	#[error("Failed to extract Stockfish: {0}")]
-	ExtractionFailed(String),
-
-	#[error("Stockfish executable not found in downloaded archive")]
-	ExecutableNotFoundInArchive,
-
 	#[error("Failed to start Stockfish engine: {0}")]
 	EngineStartFailed(String),
 
-	#[error("Failed to initialize engine: {0}")]
-	EngineInitFailed(String),
-
-	#[error("Failed to set engine option '{option}' to '{value}'")]
-	EngineOptionFailed { option: String, value: String },
-
 	#[error("Invalid FEN position '{fen}': {reason}")]
 	InvalidPosition { fen: String, reason: String },
-
-	#[error("Engine analysis failed: {0}")]
-	AnalysisFailed(String),
-
-	#[error("Network error: {0}")]
-	NetworkError(String),
-
-	#[error("I/O error: {0}")]
-	IoError(String),
 }
 
 #[allow(dead_code)]
