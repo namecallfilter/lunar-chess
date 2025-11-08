@@ -37,12 +37,14 @@ pub fn to_fen(board: &DetectedBoard, pieces: &[DetectedPiece]) -> String {
 				);
 				continue;
 			}
+
 			chess_board[rank as usize][file as usize] = Some(piece.piece_type);
 		}
 	}
 
 	if !board.playing_as_white {
 		chess_board.reverse();
+
 		for row in chess_board.iter_mut() {
 			row.reverse();
 		}
@@ -60,8 +62,10 @@ pub fn to_fen(board: &DetectedBoard, pieces: &[DetectedPiece]) -> String {
 				Some(piece) => {
 					if empty_count > 0 {
 						fen.push_str(&empty_count.to_string());
+
 						empty_count = 0;
 					}
+
 					fen.push(piece);
 				}
 				None => {

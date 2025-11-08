@@ -118,8 +118,8 @@ impl ChessDetector {
 			original_height,
 			BOARD_CONFIDENCE_THRESHOLD,
 		);
-		tracing::trace!("Board result parsing took {:?}", parse_start.elapsed());
 
+		tracing::trace!("Board result parsing took {:?}", parse_start.elapsed());
 		tracing::trace!("Board detection completed in {:?}", total_start.elapsed());
 
 		Ok(detected_board)
@@ -138,6 +138,7 @@ impl ChessDetector {
 			board.width as u32,
 			board.height as u32,
 		);
+
 		tracing::trace!("Board crop took {:?}", crop_start.elapsed());
 
 		let resize_start = std::time::Instant::now();
@@ -191,8 +192,8 @@ impl ChessDetector {
 				piece
 			})
 			.collect();
-		tracing::trace!("Piece result parsing took {:?}", parse_start.elapsed());
 
+		tracing::trace!("Piece result parsing took {:?}", parse_start.elapsed());
 		tracing::trace!("Piece detection completed in {:?}", total_start.elapsed());
 
 		Ok(detected_pieces)

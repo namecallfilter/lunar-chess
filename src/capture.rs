@@ -14,11 +14,13 @@ pub struct ScreenCapture {
 impl ScreenCapture {
 	pub fn new() -> Result<Self> {
 		let monitor = get_primary_monitor()?;
+
 		tracing::debug!(
 			"Screen capture initialized for monitor: {}x{}",
 			monitor.width().unwrap_or(0),
 			monitor.height().unwrap_or(0)
 		);
+
 		Ok(Self { monitor })
 	}
 
