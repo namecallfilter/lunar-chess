@@ -6,13 +6,15 @@ mod board;
 mod capture;
 mod detection;
 mod drawing;
+mod engine;
 mod error;
 mod services;
-mod stockfish;
 
 use capture::ScreenCapture;
 use drawing::start_overlay;
 use services::{AnalysisService, DetectionService};
+
+// TODO: Debug mode
 
 fn main() -> Result<()> {
 	tracing_subscriber::fmt()

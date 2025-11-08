@@ -6,7 +6,7 @@ use std::{
 use crate::{
 	board,
 	drawing::{BestMove, SharedBoardState, UserEvent},
-	stockfish::StockfishWrapper,
+	engine::EngineWrapper,
 };
 
 const ANALYSIS_INTERVAL_SECS: u64 = 2;
@@ -45,7 +45,7 @@ fn run_analysis_loop(
 	let mut last_analyzed_fen: Option<String> = None;
 
 	loop {
-		let stockfish_result = StockfishWrapper::new();
+		let stockfish_result = EngineWrapper::new();
 
 		match stockfish_result {
 			Ok(mut stockfish) => {
@@ -64,7 +64,7 @@ fn run_analysis_loop(
 							continue;
 						}
 
-						tracing::debug!("Valid FEN: {}", fen);
+						tracing::debug!("FEN: {}", fen);
 
 						match stockfish.set_position(&fen) {
 							Ok(_) => {

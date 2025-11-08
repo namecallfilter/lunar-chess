@@ -3,9 +3,6 @@ name = "lunar-chess"
 version = "0.1.0"
 edition = "2024"
 
-[workspace]
-members = ["stockfish"]
-
 [dependencies]
 anyhow = "1.0.100"
 thiserror = "2.0.17"
@@ -15,15 +12,13 @@ image = "0.25.8"
 ndarray = "0.16.1"
 ort = { version = "=2.0.0-rc.10", features = ["cuda"] }
 raqote = "0.8.5"
-reqwest = { version = "0.12", features = ["blocking", "stream"] }
 softbuffer = "0.4"
-stockfish = { path = "./stockfish" }
-# stockfish = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 winit = "0.30"
 xcap = "0.7"
 zip = "6.0"
+ruci = { version = "2.1.0", features = ["engine-sync"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

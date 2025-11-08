@@ -16,13 +16,9 @@ const PIECE_MODEL_PATH: &str = "models/piece.onnx";
 const YOLO_TARGET_SIZE: u32 = 640;
 
 const BOARD_CONFIDENCE_THRESHOLD: f32 = 0.75;
-const PIECE_CONFIDENCE_THRESHOLD: f32 = 0.6;
-
-// const NMS_IOU_THRESHOLD: f32 = 0.45;
+const PIECE_CONFIDENCE_THRESHOLD: f32 = 0.75;
 
 pub const MAX_PIECES: usize = 32;
-
-const ONNX_INTRA_THREADS: usize = 4;
 
 /// FEN notation for piece types (lowercase = black, uppercase = white)
 /// Order: rook, knight, bishop, queen, king, pawn (black), then white
@@ -59,14 +55,12 @@ impl ChessDetector {
 		let board_model = Session::builder()?
 			.with_execution_providers([CUDAExecutionProvider::default().build()])?
 			.with_optimization_level(GraphOptimizationLevel::Level3)?
-			.with_intra_threads(ONNX_INTRA_THREADS)?
 			.commit_from_file(BOARD_MODEL_PATH)
 			.context("Failed to load board detection model")?;
 
 		let piece_model = Session::builder()?
 			.with_execution_providers([CUDAExecutionProvider::default().build()])?
 			.with_optimization_level(GraphOptimizationLevel::Level3)?
-			.with_intra_threads(ONNX_INTRA_THREADS)?
 			.commit_from_file(PIECE_MODEL_PATH)
 			.context("Failed to load piece detection model")?;
 

@@ -1,4 +1,4 @@
 **/target
 .vscode
 dynboards/
-stockfish.exe
+chessbots/

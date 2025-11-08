@@ -1,9 +1,10 @@
 use std::{
 	thread::{self, JoinHandle},
-	time::Duration,
+	time::{Duration, Instant},
 };
 
 use anyhow::Result;
+use winit::event_loop::EventLoopProxy;
 
 use crate::{
 	board,
@@ -12,16 +13,14 @@ use crate::{
 	drawing::{BoardBounds, SharedBoardState, UserEvent},
 };
 
-const DETECTION_INTERVAL_SECS: u64 = 1;
+const DETECTION_INTERVAL_SECS: f32 = 0.1;
 
 pub struct DetectionService {
 	thread_handle: Option<JoinHandle<()>>,
 }
 
 impl DetectionService {
-	pub fn spawn(
-		proxy: winit::event_loop::EventLoopProxy<UserEvent>, board_state: SharedBoardState,
-	) -> Self {
+	pub fn spawn(proxy: EventLoopProxy<UserEvent>, board_state: SharedBoardState) -> Self {
 		let handle = thread::spawn(move || {
 			if let Err(e) = run_detection_loop(proxy, board_state) {
 				tracing::error!("Detection service error: {}", e);
@@ -56,18 +55,19 @@ fn run_detection_loop(
 		DETECTION_INTERVAL_SECS
 	);
 	let mut iteration = 0;
+	let mut orientation_detected = false;
 
 	loop {
-		let loop_start = std::time::Instant::now();
+		let loop_start = Instant::now();
 		iteration += 1;
 		tracing::debug!("Detection iteration {}", iteration);
 
-		let capture_start = std::time::Instant::now();
+		let capture_start = Instant::now();
 		let image = match capture.capture() {
 			Ok(img) => img,
 			Err(e) => {
 				tracing::error!("Screen capture failed: {}", e);
-				thread::sleep(Duration::from_secs(DETECTION_INTERVAL_SECS));
+				thread::sleep(Duration::from_secs_f32(DETECTION_INTERVAL_SECS));
 				continue;
 			}
 		};
@@ -90,12 +90,12 @@ fn run_detection_loop(
 				proxy
 					.send_event(UserEvent::UpdateDetections(None, Vec::new()))
 					.ok();
-				thread::sleep(Duration::from_secs(DETECTION_INTERVAL_SECS));
+				thread::sleep(Duration::from_secs_f32(DETECTION_INTERVAL_SECS));
 				continue;
 			}
 			Err(e) => {
 				tracing::error!("Board detection failed: {}", e);
-				thread::sleep(Duration::from_secs(DETECTION_INTERVAL_SECS));
+				thread::sleep(Duration::from_secs_f32(DETECTION_INTERVAL_SECS));
 				continue;
 			}
 		};
@@ -122,11 +122,12 @@ fn run_detection_loop(
 		};
 
 		let mut board = board;
-		if !pieces.is_empty() {
+		if !pieces.is_empty() && !orientation_detected {
 			let playing_as_white = board::detect_board_orientation(&board, &pieces);
 			board.playing_as_white = playing_as_white;
-			tracing::debug!(
-				"Board orientation: playing as {}",
+			orientation_detected = true;
+			tracing::info!(
+				"Board orientation detected: playing as {}",
 				if playing_as_white { "white" } else { "black" }
 			);
 		}
@@ -153,6 +154,6 @@ fn run_detection_loop(
 		let total_time = loop_start.elapsed();
 		tracing::debug!("Iteration completed in {:?}", total_time);
 
-		thread::sleep(Duration::from_secs(DETECTION_INTERVAL_SECS));
+		thread::sleep(Duration::from_secs_f32(DETECTION_INTERVAL_SECS));
 	}
 }

@@ -23,7 +23,7 @@ const COLOR_LABEL_BACKGROUND: (u8, u8, u8, u8) = (180, 50, 50, 50); // Dark gray
 const COLOR_LABEL_WHITE_PIECE: (u8, u8, u8, u8) = (255, 255, 255, 255); // White
 const COLOR_LABEL_BLACK_PIECE: (u8, u8, u8, u8) = (255, 200, 200, 200); // Light gray
 
-const NMS_IOU_THRESHOLD: f32 = 0.45;
+const NMS_IOU_THRESHOLD: f32 = 0.7;
 
 mod cached_colors {
 	use super::*;
