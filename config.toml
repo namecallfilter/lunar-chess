@@ -10,4 +10,3 @@ hough_threshold = 300
 
 [debugging]
 level = "trace"
-save_images = true

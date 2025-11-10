@@ -1,4 +1,4 @@
-use image::{GrayImage, Rgb, RgbImage, RgbaImage};
+use image::RgbaImage;
 
 use super::{
 	edge_detection::EdgeDetector,
@@ -6,6 +6,11 @@ use super::{
 	line_detection::{HoughLine, LineDetector},
 };
 use crate::{config::CONFIG, drawing::DetectedBoard};
+
+const MIN_CHESSBOARD_LINES: usize = 9;
+const ASPECT_RATIO_MIN: f32 = 0.8;
+const ASPECT_RATIO_MAX: f32 = 1.2;
+const SIZE_RATIO_TOLERANCE: f32 = 1.10;
 
 #[derive(Debug, Clone)]
 pub struct Grid {
@@ -16,17 +21,26 @@ pub struct Grid {
 
 impl Grid {
 	pub fn is_valid_chessboard(&self) -> bool {
-		self.horizontal_lines.len() >= 9 && self.vertical_lines.len() >= 9
+		self.horizontal_lines.len() >= MIN_CHESSBOARD_LINES
+			&& self.vertical_lines.len() >= MIN_CHESSBOARD_LINES
 	}
 
 	pub fn bounding_box(&self) -> (f32, f32, f32, f32) {
-		let xs: Vec<f32> = self.corners.iter().map(|(x, _)| *x).collect();
-		let ys: Vec<f32> = self.corners.iter().map(|(_, y)| *y).collect();
+		let (min_x, max_x) = self
+			.corners
+			.iter()
+			.map(|(x, _)| x)
+			.fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &x| {
+				(min.min(x), max.max(x))
+			});
 
-		let min_x = xs.iter().cloned().fold(f32::INFINITY, |a, b| a.min(b));
-		let max_x = xs.iter().cloned().fold(f32::NEG_INFINITY, |a, b| a.max(b));
-		let min_y = ys.iter().cloned().fold(f32::INFINITY, |a, b| a.min(b));
-		let max_y = ys.iter().cloned().fold(f32::NEG_INFINITY, |a, b| a.max(b));
+		let (min_y, max_y) = self
+			.corners
+			.iter()
+			.map(|(_, y)| y)
+			.fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &y| {
+				(min.min(y), max.max(y))
+			});
 
 		(min_x, min_y, max_x - min_x, max_y - min_y)
 	}
@@ -51,19 +65,11 @@ pub fn detect_board_algorithmic(image: &RgbaImage) -> Option<DetectedBoard> {
 
 	let gray = to_grayscale(image);
 
-	if CONFIG.debugging.save_images {
-		save_grayscale_debug(&gray, width, height, "debug_01_grayscale.png");
-	}
-
 	let edge_detector = EdgeDetector::new(width, height);
 	let strong_edge_threshold = CONFIG.detection.edge_threshold * 3.0;
 	let edges = edge_detector.simple_edges(&gray, strong_edge_threshold);
 
 	let dilated_edges = dilate_edges(&edges, width, height, 1);
-
-	if CONFIG.debugging.save_images {
-		save_edges_debug(&dilated_edges, width, height, "debug_02_edges_strong.png");
-	}
 
 	let line_detector = LineDetector::new(width, height);
 	let (horizontal_lines, vertical_lines) =
@@ -84,30 +90,7 @@ pub fn detect_board_algorithmic(image: &RgbaImage) -> Option<DetectedBoard> {
 		v_clustered.len()
 	);
 
-	if CONFIG.debugging.save_images {
-		save_lines_debug(
-			image,
-			&h_clustered,
-			&[],
-			width,
-			height,
-			"debug_03a_horizontal_lines.png",
-		);
-		save_lines_debug(
-			image,
-			&[],
-			&v_clustered,
-			width,
-			height,
-			"debug_03b_vertical_lines.png",
-		);
-	}
-
-	let grid = find_chess_grid(&h_clustered, &v_clustered, width, height, image)?;
-
-	if CONFIG.debugging.save_images {
-		save_grid_debug(image, &grid, "debug_04_grid.png");
-	}
+	let grid = find_chess_grid(&h_clustered, &v_clustered, width, height)?;
 
 	if grid.is_valid_chessboard() {
 		let confidence = calculate_grid_confidence(&grid, width, height);
@@ -120,7 +103,6 @@ pub fn detect_board_algorithmic(image: &RgbaImage) -> Option<DetectedBoard> {
 
 fn find_chess_grid(
 	horizontal: &[HoughLine], vertical: &[HoughLine], width: usize, height: usize,
-	image: &RgbaImage,
 ) -> Option<Grid> {
 	let h_grid_result = find_evenly_spaced_lines(horizontal, 9, true, width, height);
 	let v_grid_result_initial = if let Some(ref h_grid) = h_grid_result {
@@ -142,8 +124,8 @@ fn find_chess_grid(
 			size_ratio
 		);
 
-		if size_ratio <= 1.10 {
-			return build_grid(h_grid, v_grid, image, width, height);
+		if size_ratio <= SIZE_RATIO_TOLERANCE {
+			return build_grid(h_grid, v_grid);
 		}
 	}
 
@@ -161,7 +143,7 @@ fn find_chess_grid(
 					let v_span = v_grid.last()?.rho - v_grid.first()?.rho;
 					let size_ratio = h_span.max(v_span) / h_span.min(v_span);
 
-					if size_ratio <= 1.10 {
+					if size_ratio <= SIZE_RATIO_TOLERANCE {
 						let combined_score = h_score + v_score;
 
 						if combined_score > best_combined_score {
@@ -193,34 +175,20 @@ fn find_chess_grid(
 			score
 		);
 
-		build_grid(h_grid, v_grid, image, width, height)
+		build_grid(h_grid, v_grid)
 	} else {
 		tracing::debug!("No square grid found from subsets");
 		None
 	}
 }
 
-fn build_grid(
-	h_grid: Vec<HoughLine>, v_grid: Vec<HoughLine>, image: &RgbaImage, width: usize, height: usize,
-) -> Option<Grid> {
-	if CONFIG.debugging.save_images {
-		let vis_img = image.clone();
-		save_lines_debug(
-			&vis_img,
-			&h_grid,
-			&v_grid,
-			width,
-			height,
-			"debug_03c_selected_grid_lines.png",
-		);
-	}
-
+fn build_grid(h_grid: Vec<HoughLine>, v_grid: Vec<HoughLine>) -> Option<Grid> {
 	let corners = calculate_corners(&h_grid, &v_grid)?;
 
 	let (_, _, board_width, board_height) = get_bbox_from_corners(&corners);
 
 	let aspect_ratio = board_width / board_height;
-	if !(0.8..=1.2).contains(&aspect_ratio) {
+	if !(ASPECT_RATIO_MIN..=ASPECT_RATIO_MAX).contains(&aspect_ratio) {
 		tracing::debug!("Aspect ratio validation failed: {}", aspect_ratio);
 		return None;
 	}
@@ -236,13 +204,14 @@ fn find_evenly_spaced_lines(
 	lines: &[HoughLine], n: usize, is_horizontal: bool, _width: usize, _height: usize,
 ) -> Option<Vec<HoughLine>> {
 	if lines.len() < n {
+		let direction = if is_horizontal {
+			"horizontal"
+		} else {
+			"vertical"
+		};
 		tracing::debug!(
 			"Not enough {} lines: need {}, have {}",
-			if is_horizontal {
-				"horizontal"
-			} else {
-				"vertical"
-			},
+			direction,
 			n,
 			lines.len()
 		);
@@ -250,21 +219,22 @@ fn find_evenly_spaced_lines(
 	}
 
 	let mut sorted_lines = lines.to_vec();
-	sorted_lines.sort_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap());
+	sorted_lines.sort_unstable_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap());
 
+	let direction = if is_horizontal {
+		"horizontal"
+	} else {
+		"vertical"
+	};
 	tracing::debug!(
 		"Finding {} evenly-spaced {} lines from {} candidates",
 		n,
-		if is_horizontal {
-			"horizontal"
-		} else {
-			"vertical"
-		},
+		direction,
 		sorted_lines.len()
 	);
 
 	let mut lines_by_strength = sorted_lines.clone();
-	lines_by_strength.sort_by(|a, b| b.votes.cmp(&a.votes));
+	lines_by_strength.sort_unstable_by(|a, b| b.votes.cmp(&a.votes));
 
 	let vote_threshold_ratio = if sorted_lines.len() <= n + 5 {
 		0.65
@@ -384,10 +354,10 @@ fn find_evenly_spaced_lines_with_target_span(
 	}
 
 	let mut sorted_lines = lines.to_vec();
-	sorted_lines.sort_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap());
+	sorted_lines.sort_unstable_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap());
 
 	let mut lines_by_strength = sorted_lines.clone();
-	lines_by_strength.sort_by(|a, b| b.votes.cmp(&a.votes));
+	lines_by_strength.sort_unstable_by(|a, b| b.votes.cmp(&a.votes));
 
 	let vote_threshold_ratio = if sorted_lines.len() <= n + 5 {
 		0.65
@@ -480,7 +450,7 @@ fn find_best_evenly_spaced_grid(
 			let span = lines[end_idx].rho - lines[start_idx].rho;
 			let expected_spacing = span / (target_count - 1) as f32;
 
-			if expected_spacing < 100.0 || expected_spacing > 250.0 {
+			if !(100.0..=250.0).contains(&expected_spacing) {
 				continue;
 			}
 
@@ -504,7 +474,7 @@ fn find_best_evenly_spaced_grid(
 			if selected.len() == target_count - 1 {
 				selected.push(lines[end_idx]);
 
-				selected.sort_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap());
+				selected.sort_unstable_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap());
 
 				let spacing_quality = calculate_spacing_score(&selected);
 				let score = 1.0 / (1.0 + spacing_quality);
@@ -537,10 +507,10 @@ fn get_all_grid_subsets(
 	}
 
 	let mut sorted_lines = lines.to_vec();
-	sorted_lines.sort_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap());
+	sorted_lines.sort_unstable_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap());
 
 	let mut votes_for_percentile: Vec<usize> = sorted_lines.iter().map(|l| l.votes).collect();
-	votes_for_percentile.sort();
+	votes_for_percentile.sort_unstable();
 	let vote_threshold = votes_for_percentile[votes_for_percentile.len() / 2];
 
 	let strong_lines: Vec<HoughLine> = sorted_lines
@@ -588,7 +558,7 @@ fn get_all_grid_subsets(
 		let votes: Vec<usize> = subset.iter().map(|l| l.votes).collect();
 		let median_votes = {
 			let mut sorted_votes = votes.clone();
-			sorted_votes.sort();
+			sorted_votes.sort_unstable();
 			sorted_votes[sorted_votes.len() / 2]
 		};
 		let first_line_votes = subset.first().unwrap().votes;
@@ -670,7 +640,7 @@ fn get_all_grid_subsets(
 		}
 	}
 
-	all_subsets.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+	all_subsets.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
 	if !all_subsets.is_empty() {
 		Some(all_subsets)
@@ -698,13 +668,19 @@ fn calculate_corners(horizontal: &[HoughLine], vertical: &[HoughLine]) -> Option
 }
 
 fn get_bbox_from_corners(corners: &[(f32, f32); 4]) -> (f32, f32, f32, f32) {
-	let xs: Vec<f32> = corners.iter().map(|(x, _)| *x).collect();
-	let ys: Vec<f32> = corners.iter().map(|(_, y)| *y).collect();
+	let (min_x, max_x) = corners
+		.iter()
+		.map(|(x, _)| x)
+		.fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &x| {
+			(min.min(x), max.max(x))
+		});
 
-	let min_x = xs.iter().cloned().fold(f32::INFINITY, |a, b| a.min(b));
-	let max_x = xs.iter().cloned().fold(f32::NEG_INFINITY, |a, b| a.max(b));
-	let min_y = ys.iter().cloned().fold(f32::INFINITY, |a, b| a.min(b));
-	let max_y = ys.iter().cloned().fold(f32::NEG_INFINITY, |a, b| a.max(b));
+	let (min_y, max_y) = corners
+		.iter()
+		.map(|(_, y)| y)
+		.fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &y| {
+			(min.min(y), max.max(y))
+		});
 
 	(min_x, min_y, max_x - min_x, max_y - min_y)
 }
@@ -712,10 +688,10 @@ fn get_bbox_from_corners(corners: &[(f32, f32); 4]) -> (f32, f32, f32, f32) {
 fn calculate_grid_confidence(grid: &Grid, _width: usize, _height: usize) -> f32 {
 	let mut confidence: f32 = 0.9;
 
-	if grid.horizontal_lines.len() == 9 {
+	if grid.horizontal_lines.len() == MIN_CHESSBOARD_LINES {
 		confidence += 0.05;
 	}
-	if grid.vertical_lines.len() == 9 {
+	if grid.vertical_lines.len() == MIN_CHESSBOARD_LINES {
 		confidence += 0.05;
 	}
 
@@ -723,171 +699,15 @@ fn calculate_grid_confidence(grid: &Grid, _width: usize, _height: usize) -> f32 
 	let v_score = calculate_spacing_score(&grid.vertical_lines);
 
 	let avg_spacing = (h_score + v_score) / 2.0;
-	if avg_spacing < 10.0 {
-		confidence += 0.1;
+	confidence += if avg_spacing < 10.0 {
+		0.1
 	} else if avg_spacing < 50.0 {
-		confidence += 0.05;
-	}
+		0.05
+	} else {
+		0.0
+	};
 
 	confidence.min(1.0)
-}
-
-fn save_grayscale_debug(gray: &[u8], width: usize, height: usize, filename: &str) {
-	if let Some(img) = GrayImage::from_raw(width as u32, height as u32, gray.to_vec()) {
-		if let Err(e) = img.save(filename) {
-			tracing::warn!("Failed to save debug image {}: {}", filename, e);
-		} else {
-			tracing::info!("Saved debug image: {}", filename);
-		}
-	}
-}
-
-fn save_edges_debug(edges: &[bool], width: usize, height: usize, filename: &str) {
-	let mut img = GrayImage::new(width as u32, height as u32);
-	for y in 0..height {
-		for x in 0..width {
-			let idx = y * width + x;
-			let value = if edges[idx] { 255 } else { 0 };
-			img.put_pixel(x as u32, y as u32, image::Luma([value]));
-		}
-	}
-
-	if let Err(e) = img.save(filename) {
-		tracing::warn!("Failed to save debug image {}: {}", filename, e);
-	} else {
-		tracing::info!("Saved debug image: {}", filename);
-	}
-}
-
-fn save_lines_debug(
-	original: &RgbaImage, horizontal: &[HoughLine], vertical: &[HoughLine], width: usize,
-	height: usize, filename: &str,
-) {
-	tracing::info!(
-		"Drawing {} horizontal and {} vertical lines for debug visualization",
-		horizontal.len(),
-		vertical.len()
-	);
-
-	let mut img = RgbImage::new(width as u32, height as u32);
-
-	for y in 0..height {
-		for x in 0..width {
-			let pixel = original.get_pixel(x as u32, y as u32);
-			img.put_pixel(x as u32, y as u32, Rgb([pixel[0], pixel[1], pixel[2]]));
-		}
-	}
-
-	for (i, line) in horizontal.iter().enumerate() {
-		tracing::debug!(
-			"H-Line {}: rho={:.1}, theta={:.3} rad ({:.1}°), votes={}",
-			i,
-			line.rho,
-			line.theta,
-			line.theta.to_degrees(),
-			line.votes
-		);
-		draw_line_on_image(&mut img, line, Rgb([255, 0, 0]), width, height);
-	}
-
-	for (i, line) in vertical.iter().enumerate() {
-		tracing::debug!(
-			"V-Line {}: rho={:.1}, theta={:.3} rad ({:.1}°), votes={}",
-			i,
-			line.rho,
-			line.theta,
-			line.theta.to_degrees(),
-			line.votes
-		);
-		draw_line_on_image(&mut img, line, Rgb([0, 255, 0]), width, height);
-	}
-
-	if let Err(e) = img.save(filename) {
-		tracing::warn!("Failed to save debug image {}: {}", filename, e);
-	} else {
-		tracing::info!("Saved debug image: {}", filename);
-	}
-}
-
-fn save_grid_debug(original: &RgbaImage, grid: &Grid, filename: &str) {
-	let width = original.width() as usize;
-	let height = original.height() as usize;
-	let mut img = RgbImage::new(width as u32, height as u32);
-
-	for y in 0..height {
-		for x in 0..width {
-			let pixel = original.get_pixel(x as u32, y as u32);
-			img.put_pixel(x as u32, y as u32, Rgb([pixel[0], pixel[1], pixel[2]]));
-		}
-	}
-
-	for line in &grid.horizontal_lines {
-		draw_line_on_image(&mut img, line, Rgb([0, 255, 255]), width, height);
-	}
-	for line in &grid.vertical_lines {
-		draw_line_on_image(&mut img, line, Rgb([0, 255, 255]), width, height);
-	}
-
-	let corner_size = 10;
-	for &(x, y) in &grid.corners {
-		let cx = x as i32;
-		let cy = y as i32;
-
-		for dy in -corner_size..=corner_size {
-			for dx in -corner_size..=corner_size {
-				let px = cx + dx;
-				let py = cy + dy;
-
-				if px >= 0 && py >= 0 && px < width as i32 && py < height as i32 {
-					img.put_pixel(px as u32, py as u32, Rgb([255, 0, 255]));
-				}
-			}
-		}
-	}
-
-	if let Err(e) = img.save(filename) {
-		tracing::warn!("Failed to save debug image {}: {}", filename, e);
-	} else {
-		tracing::info!("Saved debug image: {}", filename);
-	}
-}
-
-fn draw_line_on_image(
-	img: &mut RgbImage, line: &HoughLine, color: Rgb<u8>, width: usize, height: usize,
-) {
-	let cos_theta = line.theta.cos();
-	let sin_theta = line.theta.sin();
-
-	let is_more_vertical =
-		(line.theta - std::f32::consts::FRAC_PI_2).abs() < std::f32::consts::FRAC_PI_4;
-
-	for thickness in -1..=1 {
-		if is_more_vertical {
-			for y in 0..height {
-				let yf = y as f32;
-
-				if cos_theta.abs() > 0.01 {
-					let x = (line.rho - yf * sin_theta) / cos_theta + thickness as f32;
-					let xi = x.round() as i32;
-					if xi >= 0 && xi < width as i32 {
-						img.put_pixel(xi as u32, y as u32, color);
-					}
-				}
-			}
-		} else {
-			for x in 0..width {
-				let xf = x as f32;
-
-				if sin_theta.abs() > 0.01 {
-					let y = (line.rho - xf * cos_theta) / sin_theta + thickness as f32;
-					let yi = y.round() as i32;
-					if yi >= 0 && yi < height as i32 {
-						img.put_pixel(x as u32, yi as u32, color);
-					}
-				}
-			}
-		}
-	}
 }
 
 fn dilate_edges(edges: &[bool], width: usize, height: usize, radius: usize) -> Vec<bool> {

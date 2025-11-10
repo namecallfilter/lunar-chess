@@ -1,15 +1,18 @@
 use image::RgbaImage;
 
+const R_WEIGHT: f32 = 0.299;
+const G_WEIGHT: f32 = 0.587;
+const B_WEIGHT: f32 = 0.114;
+
 pub fn to_grayscale(image: &RgbaImage) -> Vec<u8> {
 	let (width, height) = (image.width(), image.height());
-	let mut gray = Vec::with_capacity((width * height) as usize);
+	let capacity = (width * height) as usize;
+	let mut gray = Vec::with_capacity(capacity);
 
 	for pixel in image.pixels() {
-		let r = pixel[0] as f32;
-		let g = pixel[1] as f32;
-		let b = pixel[2] as f32;
-
-		let luminosity = (0.299 * r + 0.587 * g + 0.114 * b) as u8;
+		let luminosity = (R_WEIGHT * pixel[0] as f32
+			+ G_WEIGHT * pixel[1] as f32
+			+ B_WEIGHT * pixel[2] as f32) as u8;
 		gray.push(luminosity);
 	}
 
