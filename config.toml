@@ -5,9 +5,9 @@ multi_pv = 3
 nodes = 3
 
 [detection]
-edge_threshold = 50.0
+edge_threshold = 50
 hough_threshold = 300
 
 [debugging]
 level = "trace"
-save_images = false
+save_images = true

@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HoughLine {
 	pub rho: f32,
 	pub theta: f32,

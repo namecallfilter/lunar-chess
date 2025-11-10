@@ -59,13 +59,15 @@ pub fn detect_board_algorithmic(image: &RgbaImage) -> Option<DetectedBoard> {
 	let strong_edge_threshold = CONFIG.detection.edge_threshold * 3.0;
 	let edges = edge_detector.simple_edges(&gray, strong_edge_threshold);
 
+	let dilated_edges = dilate_edges(&edges, width, height, 1);
+
 	if CONFIG.debugging.save_images {
-		save_edges_debug(&edges, width, height, "debug_02_edges_strong.png");
+		save_edges_debug(&dilated_edges, width, height, "debug_02_edges_strong.png");
 	}
 
 	let line_detector = LineDetector::new(width, height);
 	let (horizontal_lines, vertical_lines) =
-		line_detector.detect_orthogonal_lines(&edges, CONFIG.detection.hough_threshold);
+		line_detector.detect_orthogonal_lines(&dilated_edges, CONFIG.detection.hough_threshold);
 
 	tracing::debug!(
 		"Detected {} horizontal and {} vertical lines",
@@ -147,10 +149,55 @@ fn find_chess_grid(
 
 	tracing::debug!("Attempting to find best 9x9 grid from all detected lines...");
 
-	let h_grid = find_best_grid_subset(horizontal, 9, true)?;
-	let v_grid = find_best_grid_subset(vertical, 9, false)?;
+	let mut best_grid: Option<(Vec<HoughLine>, Vec<HoughLine>, f32)> = None;
+	let mut best_combined_score = f32::MIN;
 
-	build_grid(h_grid, v_grid, image, width, height)
+	if let Some(h_candidates) = get_all_grid_subsets(horizontal, 9, true) {
+		for (h_grid, h_score) in h_candidates {
+			let h_span = h_grid.last()?.rho - h_grid.first()?.rho;
+
+			if let Some(v_candidates) = get_all_grid_subsets(vertical, 9, false) {
+				for (v_grid, v_score) in &v_candidates {
+					let v_span = v_grid.last()?.rho - v_grid.first()?.rho;
+					let size_ratio = h_span.max(v_span) / h_span.min(v_span);
+
+					if size_ratio <= 1.10 {
+						let combined_score = h_score + v_score;
+
+						if combined_score > best_combined_score {
+							best_combined_score = combined_score;
+							best_grid = Some((h_grid.clone(), v_grid.clone(), combined_score));
+
+							tracing::debug!(
+								"Found square grid candidate: h_span={:.1}, v_span={:.1}, ratio={:.2}, score={:.3}",
+								h_span,
+								v_span,
+								size_ratio,
+								combined_score
+							);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if let Some((h_grid, v_grid, score)) = best_grid {
+		let h_span = h_grid.last()?.rho - h_grid.first()?.rho;
+		let v_span = v_grid.last()?.rho - v_grid.first()?.rho;
+
+		tracing::debug!(
+			"Selected best square grid: h_span={:.1}, v_span={:.1}, score={:.3}",
+			h_span,
+			v_span,
+			score
+		);
+
+		build_grid(h_grid, v_grid, image, width, height)
+	} else {
+		tracing::debug!("No square grid found from subsets");
+		None
+	}
 }
 
 fn build_grid(
@@ -419,9 +466,62 @@ fn calculate_spacing_score(lines: &[HoughLine]) -> f32 {
 		/ spacings.len() as f32
 }
 
-fn find_best_grid_subset(
-	lines: &[HoughLine], target_count: usize, is_horizontal: bool,
+fn find_best_evenly_spaced_grid(
+	lines: &[HoughLine], target_count: usize,
 ) -> Option<Vec<HoughLine>> {
+	if lines.len() < target_count {
+		return None;
+	}
+
+	let mut best_grid: Option<(Vec<HoughLine>, f32)> = None;
+
+	for start_idx in 0..lines.len() {
+		for end_idx in (start_idx + target_count - 1)..lines.len() {
+			let span = lines[end_idx].rho - lines[start_idx].rho;
+			let expected_spacing = span / (target_count - 1) as f32;
+
+			if expected_spacing < 100.0 || expected_spacing > 250.0 {
+				continue;
+			}
+
+			let mut selected = vec![lines[start_idx]];
+
+			for i in 1..(target_count - 1) {
+				let target_rho = lines[start_idx].rho + (expected_spacing * i as f32);
+
+				let closest_line = lines[start_idx..=end_idx]
+					.iter()
+					.filter(|line| !selected.contains(line))
+					.min_by_key(|line| ((line.rho - target_rho).abs() * 1000.0) as i32);
+
+				if let Some(line) = closest_line {
+					selected.push(*line);
+				} else {
+					break;
+				}
+			}
+
+			if selected.len() == target_count - 1 {
+				selected.push(lines[end_idx]);
+
+				selected.sort_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap());
+
+				let spacing_quality = calculate_spacing_score(&selected);
+				let score = 1.0 / (1.0 + spacing_quality);
+
+				if best_grid.is_none() || score > best_grid.as_ref().unwrap().1 {
+					best_grid = Some((selected.clone(), score));
+				}
+			}
+		}
+	}
+
+	best_grid.map(|(grid, _)| grid)
+}
+
+fn get_all_grid_subsets(
+	lines: &[HoughLine], target_count: usize, is_horizontal: bool,
+) -> Option<Vec<(Vec<HoughLine>, f32)>> {
 	if lines.len() < target_count {
 		tracing::debug!(
 			"Not enough {} lines: need {}, have {}",
@@ -439,31 +539,74 @@ fn find_best_grid_subset(
 	let mut sorted_lines = lines.to_vec();
 	sorted_lines.sort_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap());
 
+	let mut votes_for_percentile: Vec<usize> = sorted_lines.iter().map(|l| l.votes).collect();
+	votes_for_percentile.sort();
+	let vote_threshold = votes_for_percentile[votes_for_percentile.len() / 2];
+
 	let strong_lines: Vec<HoughLine> = sorted_lines
 		.into_iter()
-		.filter(|line| line.votes >= 500)
+		.filter(|line| line.votes >= vote_threshold)
 		.collect();
 
-	if strong_lines.len() < target_count {
+	let max_isolation_distance = 250.0;
+	let filtered_lines: Vec<HoughLine> = strong_lines
+		.iter()
+		.filter(|line| {
+			strong_lines.iter().any(|other| {
+				if line.rho == other.rho {
+					return false;
+				}
+				(line.rho - other.rho).abs() <= max_isolation_distance
+			})
+		})
+		.copied()
+		.collect();
+
+	if filtered_lines.len() < target_count {
 		tracing::debug!(
-			"Not enough strong {} lines after filtering: need {}, have {} (filtered {} weak lines)",
+			"Not enough {} lines after filtering: need {}, have {} (removed {} weak and {} outliers)",
 			if is_horizontal {
 				"horizontal"
 			} else {
 				"vertical"
 			},
 			target_count,
-			strong_lines.len(),
-			lines.len() - strong_lines.len()
+			filtered_lines.len(),
+			lines.len() - strong_lines.len(),
+			strong_lines.len() - filtered_lines.len()
 		);
 		return None;
 	}
 
-	let mut best_subset: Option<Vec<HoughLine>> = None;
-	let mut best_score = f32::MIN;
+	let strong_lines = filtered_lines;
+
+	let mut all_subsets: Vec<(Vec<HoughLine>, f32)> = Vec::new();
 
 	for start_idx in 0..=(strong_lines.len() - target_count) {
 		let subset: Vec<HoughLine> = strong_lines[start_idx..start_idx + target_count].to_vec();
+
+		let votes: Vec<usize> = subset.iter().map(|l| l.votes).collect();
+		let median_votes = {
+			let mut sorted_votes = votes.clone();
+			sorted_votes.sort();
+			sorted_votes[sorted_votes.len() / 2]
+		};
+		let first_line_votes = subset.first().unwrap().votes;
+		let last_line_votes = subset.last().unwrap().votes;
+
+		if (first_line_votes as f32) < (median_votes as f32 * 0.70)
+			|| (last_line_votes as f32) < (median_votes as f32 * 0.70)
+		{
+			tracing::trace!(
+				"Subset [{}-{}]: rejected - edge lines too weak (first={}, last={}, median={})",
+				start_idx,
+				start_idx + target_count - 1,
+				first_line_votes,
+				last_line_votes,
+				median_votes
+			);
+			continue;
+		}
 
 		let spacing_quality = calculate_spacing_score(&subset);
 		let total_votes: usize = subset.iter().map(|l| l.votes).sum();
@@ -472,10 +615,11 @@ fn find_best_grid_subset(
 
 		let vote_score = (total_votes as f32 / 10000.0).min(1.0);
 		let spacing_uniformity_score = 1.0 / (1.0 + spacing_quality / 100.0);
-		let expected_spacing_score = 1.0 / (1.0 + ((avg_spacing - 153.0).abs() / 50.0));
+
+		let expected_spacing_score = 1.0 / (1.0 + ((avg_spacing - 153.0).abs() / 20.0));
 
 		let score =
-			vote_score * 0.5 + spacing_uniformity_score * 0.3 + expected_spacing_score * 0.2;
+			vote_score * 0.15 + spacing_uniformity_score * 0.15 + expected_spacing_score * 0.7;
 
 		tracing::trace!(
 			"Subset [{}-{}]: span={:.1}, spacing={:.1}, votes={}, quality={:.2}, score={:.3}",
@@ -488,29 +632,51 @@ fn find_best_grid_subset(
 			score
 		);
 
-		if score > best_score {
-			best_score = score;
-			best_subset = Some(subset);
-		}
+		all_subsets.push((subset, score));
 	}
 
-	if let Some(ref selected) = best_subset {
-		let span = selected.last().unwrap().rho - selected.first().unwrap().rho;
-		let total_votes: usize = selected.iter().map(|l| l.votes).sum();
+	if strong_lines.len() >= target_count {
 		tracing::debug!(
-			"Selected {} grid: span={:.1}, votes={}, score={:.3}",
+			"Trying grid-fitting approach for {} direction",
 			if is_horizontal {
 				"horizontal"
 			} else {
 				"vertical"
-			},
-			span,
-			total_votes,
-			best_score
+			}
 		);
+
+		if let Some(grid_subset) = find_best_evenly_spaced_grid(&strong_lines, target_count) {
+			let spacing_quality = calculate_spacing_score(&grid_subset);
+			let total_votes: usize = grid_subset.iter().map(|l| l.votes).sum();
+			let span = grid_subset.last().unwrap().rho - grid_subset.first().unwrap().rho;
+			let avg_spacing = span / (target_count - 1) as f32;
+
+			let vote_score = (total_votes as f32 / 10000.0).min(1.0);
+			let spacing_uniformity_score = 1.0 / (1.0 + spacing_quality / 100.0);
+			let expected_spacing_score = 1.0 / (1.0 + ((avg_spacing - 153.0).abs() / 20.0));
+			let score =
+				vote_score * 0.15 + spacing_uniformity_score * 0.15 + expected_spacing_score * 0.7;
+
+			tracing::debug!(
+				"Grid-fitting found subset: span={:.1}, spacing={:.1}, votes={}, quality={:.2}, score={:.3}",
+				span,
+				avg_spacing,
+				total_votes,
+				spacing_quality,
+				score
+			);
+
+			all_subsets.push((grid_subset, score));
+		}
 	}
 
-	best_subset
+	all_subsets.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+	if !all_subsets.is_empty() {
+		Some(all_subsets)
+	} else {
+		None
+	}
 }
 
 fn calculate_corners(horizontal: &[HoughLine], vertical: &[HoughLine]) -> Option<[(f32, f32); 4]> {
@@ -722,4 +888,39 @@ fn draw_line_on_image(
 			}
 		}
 	}
+}
+
+fn dilate_edges(edges: &[bool], width: usize, height: usize, radius: usize) -> Vec<bool> {
+	let mut dilated = vec![false; edges.len()];
+
+	for y in 0..height {
+		for x in 0..width {
+			let idx = y * width + x;
+
+			if edges[idx] {
+				dilated[idx] = true;
+				continue;
+			}
+
+			let mut found_edge = false;
+			'outer: for dy in -(radius as isize)..=(radius as isize) {
+				for dx in -(radius as isize)..=(radius as isize) {
+					let ny = y as isize + dy;
+					let nx = x as isize + dx;
+
+					if ny >= 0 && ny < height as isize && nx >= 0 && nx < width as isize {
+						let neighbor_idx = (ny as usize) * width + (nx as usize);
+						if edges[neighbor_idx] {
+							found_edge = true;
+							break 'outer;
+						}
+					}
+				}
+			}
+
+			dilated[idx] = found_edge;
+		}
+	}
+
+	dilated
 }
