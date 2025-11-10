@@ -56,6 +56,7 @@ fn run_detection_loop(
 	);
 	let mut iteration = 0;
 	let mut orientation_detected = false;
+	let mut detected_playing_as_white = true;
 
 	loop {
 		let loop_start = Instant::now();
@@ -124,13 +125,16 @@ fn run_detection_loop(
 		let mut board = board;
 		if !pieces.is_empty() && !orientation_detected {
 			let playing_as_white = board::detect_board_orientation(&board, &pieces);
-			board.playing_as_white = playing_as_white;
+			detected_playing_as_white = playing_as_white;
 			orientation_detected = true;
 			tracing::info!(
 				"Board orientation detected: playing as {}",
 				if playing_as_white { "white" } else { "black" }
 			);
 		}
+
+		// Apply the detected orientation to every board
+		board.playing_as_white = detected_playing_as_white;
 
 		if !pieces.is_empty() && pieces.len() <= crate::detection::MAX_PIECES {
 			let mut state_lock = board_state.lock().unwrap();

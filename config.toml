@@ -9,4 +9,4 @@ edge_threshold = 50
 hough_threshold = 300
 
 [debugging]
-level = "trace"
+level = "info"
