@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 
 mod board;
+mod board_vision;
 mod capture;
 mod config;
 mod detection;
@@ -10,7 +11,6 @@ mod drawing;
 mod engine;
 mod error;
 mod services;
-mod vision;
 
 use capture::ScreenCapture;
 use config::CONFIG;

@@ -9,8 +9,8 @@ use ort::{
 };
 
 use crate::{
+	board_vision::grid_detection::detect_board_algorithmic,
 	drawing::{DetectedBoard, DetectedPiece},
-	vision::grid_detection::detect_board_algorithmic,
 };
 
 const PIECE_MODEL_PATH: &str = "models/piece.onnx";
