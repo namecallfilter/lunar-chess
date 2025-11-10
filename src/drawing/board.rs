@@ -89,53 +89,6 @@ impl DetectedBoard {
 	pub fn cell_size(&self) -> (f32, f32) {
 		(self.width / 8.0, self.height / 8.0)
 	}
-
-	pub fn from_yolo_output(
-		predictions: &ndarray::ArrayViewD<f32>, img_width: u32, img_height: u32,
-		confidence_threshold: f32,
-	) -> Option<Self> {
-		let shape = predictions.shape();
-		if shape.len() < 3 {
-			tracing::warn!("Invalid YOLO output shape for board detection");
-			return None;
-		}
-
-		let num_detections = shape[2];
-		let scale_factor = 640.0;
-		let scale_x = img_width as f32 / scale_factor;
-		let scale_y = img_height as f32 / scale_factor;
-
-		let mut best_detection: Option<DetectedBoard> = None;
-		let mut max_confidence = confidence_threshold;
-
-		for i in 0..num_detections {
-			let confidence = predictions[[0, 4, i]];
-
-			if confidence > max_confidence {
-				let x_center = predictions[[0, 0, i]];
-				let y_center = predictions[[0, 1, i]];
-				let width = predictions[[0, 2, i]];
-				let height = predictions[[0, 3, i]];
-
-				let x = (x_center - width / 2.0) * scale_x;
-				let y = (y_center - height / 2.0) * scale_y;
-				let w = width * scale_x;
-				let h = height * scale_y;
-
-				best_detection = Some(DetectedBoard {
-					x,
-					y,
-					width: w,
-					height: h,
-					confidence,
-					playing_as_white: true,
-				});
-				max_confidence = confidence;
-			}
-		}
-
-		best_detection
-	}
 }
 
 #[derive(Clone, Debug)]

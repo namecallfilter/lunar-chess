@@ -1,0 +1,13 @@
+[engine]
+threads = 6
+hash = 256
+multi_pv = 3
+nodes = 3
+
+[detection]
+edge_threshold = 50.0
+hough_threshold = 300
+
+[debugging]
+level = "debug"
+save_images = false

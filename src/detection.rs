@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use fast_image_resize::{PixelType, Resizer, images::Image};
 use image::RgbaImage;
 use ndarray::Array4;
@@ -8,14 +8,13 @@ use ort::{
 	value::TensorRef,
 };
 
-use crate::drawing::{DetectedBoard, DetectedPiece};
+use crate::{
+	drawing::{DetectedBoard, DetectedPiece},
+	vision::grid_detection::detect_board_algorithmic,
+};
 
-const BOARD_MODEL_PATH: &str = "models/board.onnx";
 const PIECE_MODEL_PATH: &str = "models/piece.onnx";
-
 const YOLO_TARGET_SIZE: u32 = 640;
-
-const BOARD_CONFIDENCE_THRESHOLD: f32 = 0.75;
 const PIECE_CONFIDENCE_THRESHOLD: f32 = 0.75;
 
 pub const MAX_PIECES: usize = 32;
@@ -42,7 +41,6 @@ impl ImageBuffers {
 }
 
 pub struct ChessDetector {
-	board_model: Session,
 	piece_model: Session,
 	resizer: Resizer,
 	buffers: ImageBuffers,
@@ -50,79 +48,27 @@ pub struct ChessDetector {
 
 impl ChessDetector {
 	pub fn new() -> Result<Self> {
-		tracing::info!("Initializing ONNX models with CUDA acceleration...");
-
-		let board_model = Session::builder()?
-			.with_execution_providers([CUDAExecutionProvider::default().build()])?
-			.with_optimization_level(GraphOptimizationLevel::Level3)?
-			.commit_from_file(BOARD_MODEL_PATH)
-			.context("Failed to load board detection model")?;
+		tracing::info!("Initializing piece detection model with CUDA acceleration...");
 
 		let piece_model = Session::builder()?
 			.with_execution_providers([CUDAExecutionProvider::default().build()])?
 			.with_optimization_level(GraphOptimizationLevel::Level3)?
-			.commit_from_file(PIECE_MODEL_PATH)
-			.context("Failed to load piece detection model")?;
+			.commit_from_file(PIECE_MODEL_PATH)?;
 
-		tracing::info!("Chess detection models loaded successfully");
+		tracing::info!("Piece detection model loaded successfully");
 
 		Ok(Self {
-			board_model,
 			piece_model,
 			resizer: Resizer::new(),
 			buffers: ImageBuffers::new(),
 		})
 	}
 
-	pub fn detect_board(&mut self, image: &RgbaImage) -> Result<Option<DetectedBoard>> {
-		let total_start = std::time::Instant::now();
-
-		let original_width = image.width();
-		let original_height = image.height();
-
-		let resize_start = std::time::Instant::now();
-		let mut raw_buf = image.as_raw().clone();
-		let src_image = Image::from_slice_u8(
-			original_width,
-			original_height,
-			raw_buf.as_mut_slice(),
-			PixelType::U8x4,
-		)?;
-
-		let mut dst_image = Image::new(YOLO_TARGET_SIZE, YOLO_TARGET_SIZE, PixelType::U8x4);
-		self.resizer.resize(&src_image, &mut dst_image, None)?;
-
-		let resized = RgbaImage::from_raw(YOLO_TARGET_SIZE, YOLO_TARGET_SIZE, dst_image.into_vec())
-			.context("Failed to create resized image")?;
-		tracing::trace!("Board image resize took {:?}", resize_start.elapsed());
-
-		let tensor_start = std::time::Instant::now();
-		image_to_tensor_inplace(&resized, &mut self.buffers.tensor_array);
-		tracing::trace!("Board tensor conversion took {:?}", tensor_start.elapsed());
-
-		let inference_start = std::time::Instant::now();
-		let board_outputs = self.board_model.run(
-			ort::inputs!["images" => TensorRef::from_array_view(self.buffers.tensor_array.view())?],
-		)?;
-		tracing::trace!("Board inference took {:?}", inference_start.elapsed());
-
-		let extract_start = std::time::Instant::now();
-		let board_predictions = board_outputs["output0"].try_extract_array::<f32>()?;
-		tracing::trace!("Board result extraction took {:?}", extract_start.elapsed());
-
-		let parse_start = std::time::Instant::now();
-		let predictions_view = board_predictions.view();
-		let detected_board = DetectedBoard::from_yolo_output(
-			&predictions_view,
-			original_width,
-			original_height,
-			BOARD_CONFIDENCE_THRESHOLD,
-		);
-
-		tracing::trace!("Board result parsing took {:?}", parse_start.elapsed());
-		tracing::trace!("Board detection completed in {:?}", total_start.elapsed());
-
-		Ok(detected_board)
+	pub fn detect_board(&self, image: &RgbaImage) -> Result<Option<DetectedBoard>> {
+		let start = std::time::Instant::now();
+		let result = detect_board_algorithmic(image);
+		tracing::debug!("Algorithmic board detection took {:?}", start.elapsed());
+		Ok(result)
 	}
 
 	pub fn detect_pieces(

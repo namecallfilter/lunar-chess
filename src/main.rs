@@ -4,11 +4,13 @@ use anyhow::Result;
 
 mod board;
 mod capture;
+mod config;
 mod detection;
 mod drawing;
 mod engine;
 mod error;
 mod services;
+mod vision;
 
 use capture::ScreenCapture;
 use drawing::start_overlay;

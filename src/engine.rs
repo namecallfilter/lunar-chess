@@ -6,12 +6,10 @@ use std::{
 
 use anyhow::Result;
 
-use crate::error::AnalysisError;
+use crate::{config::CONFIG, error::AnalysisError};
 
 const ENGINE_PATH: &str = "models/chessbots/lc0.exe";
 const DEFAULT_WEIGHTS_PATH: &str = "models/chessbots/maia-1100.pb.gz";
-
-const ENGINE_MULTI_PV: usize = 3;
 
 const MATE_SCORE_BASE: i32 = 10000;
 // const MATE_DISTANCE_PENALTY: i32 = 10;
@@ -49,10 +47,20 @@ impl EngineWrapper {
 
 		engine.send(ruci::SetOption {
 			name: "MultiPV".into(),
-			value: Some(ENGINE_MULTI_PV.to_string().into()),
+			value: Some(CONFIG.engine.multi_pv.to_string().into()),
 		})?;
 
-		tracing::info!("Engine started successfully");
+		engine.send(ruci::SetOption {
+			name: "Threads".into(),
+			value: Some(CONFIG.engine.threads.to_string().into()),
+		})?;
+
+		engine.send(ruci::SetOption {
+			name: "Hash".into(),
+			value: Some(CONFIG.engine.hash.to_string().into()),
+		})?;
+
+		tracing::info!("Engine started successfully with config: {:?}", CONFIG);
 
 		Ok(Self { engine })
 	}
@@ -77,7 +85,7 @@ impl EngineWrapper {
 
 		self.engine.go(
 			&ruci::Go {
-				nodes: Some(10),
+				nodes: Some(CONFIG.engine.nodes),
 				..Default::default()
 			},
 			|info| {

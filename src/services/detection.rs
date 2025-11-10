@@ -48,6 +48,14 @@ fn run_detection_loop(
 
 	let capture = ScreenCapture::new()?;
 
+	// let board_config = crate::vision::grid_detection::BoardDetectionConfig {
+	// 	edge_threshold: config.detection.edge_threshold,
+	// 	hough_threshold: config.detection.hough_threshold,
+	// 	min_board_size: 200.0,
+	// 	max_board_size: 2000.0,
+	// 	save_debug_images: config.debugging.save_images,
+	// };
+
 	let mut detector = ChessDetector::new()?;
 
 	tracing::info!(

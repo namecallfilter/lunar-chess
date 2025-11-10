@@ -64,8 +64,6 @@ fn run_analysis_loop(
 							continue;
 						}
 
-						tracing::debug!("FEN: {}", fen);
-
 						match stockfish.set_position(&fen) {
 							Ok(_) => {
 								tracing::trace!("Position set successfully");
