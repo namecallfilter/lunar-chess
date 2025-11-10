@@ -1,4 +1,4 @@
-mod grayscale;
 mod edge_detection;
-mod line_detection;
+mod grayscale;
 pub mod grid_detection;
+mod line_detection;

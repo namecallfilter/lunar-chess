@@ -120,35 +120,42 @@ fn find_chess_grid(
 	horizontal: &[HoughLine], vertical: &[HoughLine], width: usize, height: usize,
 	image: &RgbaImage,
 ) -> Option<Grid> {
-	let h_grid = find_evenly_spaced_lines(horizontal, 9, true, width, height)?;
+	let h_grid_result = find_evenly_spaced_lines(horizontal, 9, true, width, height);
+	let v_grid_result_initial = if let Some(ref h_grid) = h_grid_result {
+		let h_span = h_grid.last()?.rho - h_grid.first()?.rho;
+		find_evenly_spaced_lines_with_target_span(vertical, 9, false, width, height, h_span)
+	} else {
+		None
+	};
 
-	let h_span = h_grid.last()?.rho - h_grid.first()?.rho;
-	let expected_square_size = h_span;
+	if let (Some(h_grid), Some(v_grid)) = (h_grid_result, v_grid_result_initial) {
+		let h_span = h_grid.last()?.rho - h_grid.first()?.rho;
+		let v_span = v_grid.last()?.rho - v_grid.first()?.rho;
+		let size_ratio = h_span.max(v_span) / h_span.min(v_span);
 
-	let v_grid = find_evenly_spaced_lines_with_target_span(
-		vertical,
-		9,
-		false,
-		width,
-		height,
-		expected_square_size,
-	)?;
+		tracing::debug!(
+			"Complete grid found: h_span={:.1}, v_span={:.1}, ratio={:.2}",
+			h_span,
+			v_span,
+			size_ratio
+		);
 
-	let v_span = v_grid.last()?.rho - v_grid.first()?.rho;
-	let size_ratio = h_span.max(v_span) / h_span.min(v_span);
-
-	tracing::debug!(
-		"Grid spans: h={:.1}, v={:.1}, ratio={:.2}",
-		h_span,
-		v_span,
-		size_ratio
-	);
-
-	if size_ratio > 1.10 {
-		tracing::debug!("Grid is not square enough (max ratio: 1.10)");
-		return None;
+		if size_ratio <= 1.10 {
+			return build_grid(h_grid, v_grid, image, width, height);
+		}
 	}
 
+	tracing::debug!("Attempting to find best 9x9 grid from all detected lines...");
+
+	let h_grid = find_best_grid_subset(horizontal, 9, true)?;
+	let v_grid = find_best_grid_subset(vertical, 9, false)?;
+
+	build_grid(h_grid, v_grid, image, width, height)
+}
+
+fn build_grid(
+	h_grid: Vec<HoughLine>, v_grid: Vec<HoughLine>, image: &RgbaImage, width: usize, height: usize,
+) -> Option<Grid> {
 	if CONFIG.debugging.save_images {
 		let vis_img = image.clone();
 		save_lines_debug(
@@ -164,21 +171,6 @@ fn find_chess_grid(
 	let corners = calculate_corners(&h_grid, &v_grid)?;
 
 	let (_, _, board_width, board_height) = get_bbox_from_corners(&corners);
-
-	// if board_width < config.min_board_size
-	// 	|| board_height < config.min_board_size
-	// 	|| board_width > config.max_board_size
-	// 	|| board_height > config.max_board_size
-	// {
-	// 	tracing::debug!(
-	// 		"Board size validation failed: {}x{} (min: {}, max: {})",
-	// 		board_width,
-	// 		board_height,
-	// 		config.min_board_size,
-	// 		config.max_board_size
-	// 	);
-	// 	return None;
-	// }
 
 	let aspect_ratio = board_width / board_height;
 	if !(0.8..=1.2).contains(&aspect_ratio) {
@@ -419,13 +411,106 @@ fn calculate_spacing_score(lines: &[HoughLine]) -> f32 {
 	}
 
 	let mean_spacing = spacings.iter().sum::<f32>() / spacings.len() as f32;
-	
 
 	spacings
 		.iter()
 		.map(|s| (s - mean_spacing).powi(2))
 		.sum::<f32>()
 		/ spacings.len() as f32
+}
+
+fn find_best_grid_subset(
+	lines: &[HoughLine], target_count: usize, is_horizontal: bool,
+) -> Option<Vec<HoughLine>> {
+	if lines.len() < target_count {
+		tracing::debug!(
+			"Not enough {} lines: need {}, have {}",
+			if is_horizontal {
+				"horizontal"
+			} else {
+				"vertical"
+			},
+			target_count,
+			lines.len()
+		);
+		return None;
+	}
+
+	let mut sorted_lines = lines.to_vec();
+	sorted_lines.sort_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap());
+
+	let strong_lines: Vec<HoughLine> = sorted_lines
+		.into_iter()
+		.filter(|line| line.votes >= 500)
+		.collect();
+
+	if strong_lines.len() < target_count {
+		tracing::debug!(
+			"Not enough strong {} lines after filtering: need {}, have {} (filtered {} weak lines)",
+			if is_horizontal {
+				"horizontal"
+			} else {
+				"vertical"
+			},
+			target_count,
+			strong_lines.len(),
+			lines.len() - strong_lines.len()
+		);
+		return None;
+	}
+
+	let mut best_subset: Option<Vec<HoughLine>> = None;
+	let mut best_score = f32::MIN;
+
+	for start_idx in 0..=(strong_lines.len() - target_count) {
+		let subset: Vec<HoughLine> = strong_lines[start_idx..start_idx + target_count].to_vec();
+
+		let spacing_quality = calculate_spacing_score(&subset);
+		let total_votes: usize = subset.iter().map(|l| l.votes).sum();
+		let span = subset.last().unwrap().rho - subset.first().unwrap().rho;
+		let avg_spacing = span / (target_count - 1) as f32;
+
+		let vote_score = (total_votes as f32 / 10000.0).min(1.0);
+		let spacing_uniformity_score = 1.0 / (1.0 + spacing_quality / 100.0);
+		let expected_spacing_score = 1.0 / (1.0 + ((avg_spacing - 153.0).abs() / 50.0));
+
+		let score =
+			vote_score * 0.5 + spacing_uniformity_score * 0.3 + expected_spacing_score * 0.2;
+
+		tracing::trace!(
+			"Subset [{}-{}]: span={:.1}, spacing={:.1}, votes={}, quality={:.2}, score={:.3}",
+			start_idx,
+			start_idx + target_count - 1,
+			span,
+			avg_spacing,
+			total_votes,
+			spacing_quality,
+			score
+		);
+
+		if score > best_score {
+			best_score = score;
+			best_subset = Some(subset);
+		}
+	}
+
+	if let Some(ref selected) = best_subset {
+		let span = selected.last().unwrap().rho - selected.first().unwrap().rho;
+		let total_votes: usize = selected.iter().map(|l| l.votes).sum();
+		tracing::debug!(
+			"Selected {} grid: span={:.1}, votes={}, score={:.3}",
+			if is_horizontal {
+				"horizontal"
+			} else {
+				"vertical"
+			},
+			span,
+			total_votes,
+			best_score
+		);
+	}
+
+	best_subset
 }
 
 fn calculate_corners(horizontal: &[HoughLine], vertical: &[HoughLine]) -> Option<[(f32, f32); 4]> {

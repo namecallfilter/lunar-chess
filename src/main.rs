@@ -13,16 +13,19 @@ mod services;
 mod vision;
 
 use capture::ScreenCapture;
+use config::CONFIG;
 use drawing::start_overlay;
 use services::{AnalysisService, DetectionService};
-
-// TODO: Debug mode
 
 fn main() -> Result<()> {
 	tracing_subscriber::fmt()
 		.with_env_filter(
 			tracing_subscriber::EnvFilter::from_default_env()
-				.add_directive("lunar_chess=debug".parse().unwrap())
+				.add_directive(
+					format!("lunar_chess={}", CONFIG.debugging.level)
+						.parse()
+						.unwrap(),
+				)
 				.add_directive(tracing::Level::WARN.into()),
 		)
 		.with_target(false)

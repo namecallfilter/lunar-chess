@@ -9,5 +9,5 @@ edge_threshold = 50.0
 hough_threshold = 300
 
 [debugging]
-level = "debug"
+level = "trace"
 save_images = false
