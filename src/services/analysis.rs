@@ -4,9 +4,9 @@ use std::{
 };
 
 use crate::{
-	board,
-	drawing::{BestMove, SharedBoardState, UserEvent},
+	chess::board,
 	engine::EngineWrapper,
+	ui::{BestMove, SharedBoardState, UserEvent},
 };
 
 const ANALYSIS_INTERVAL_SECS: u64 = 2;

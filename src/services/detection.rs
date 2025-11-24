@@ -7,10 +7,11 @@ use anyhow::Result;
 use winit::event_loop::EventLoopProxy;
 
 use crate::{
-	board,
-	capture::ScreenCapture,
-	detection::ChessDetector,
-	drawing::{BoardBounds, DetectedBoard, SharedBoardState, UserEvent},
+	capture::screen::ScreenCapture,
+	chess::board,
+	model::detected::DetectedBoard,
+	ui::{BoardBounds, SharedBoardState, UserEvent},
+	vision::detector::ChessDetector,
 };
 
 const DETECTION_INTERVAL_SECS: f32 = 0.1;
@@ -85,12 +86,11 @@ fn run_detection_loop(
 			match detector.detect_board(&image) {
 				Ok(Some(b)) => {
 					tracing::debug!(
-						"Board detected at ({:.0}, {:.0}) size {}x{} (confidence: {:.1}%)",
+						"Board detected at ({:.0}, {:.0}) size {}x{})",
 						b.x,
 						b.y,
 						b.width,
 						b.height,
-						b.confidence * 100.0
 					);
 					cached_board = Some(b.clone());
 					frames_since_board_detection = 0;
@@ -128,11 +128,11 @@ fn run_detection_loop(
 			Ok(p) => {
 				tracing::debug!("Detected {} pieces on board", p.len());
 
-				if p.len() > crate::detection::MAX_PIECES {
+				if p.len() > crate::vision::detector::MAX_PIECES {
 					tracing::warn!(
 						"Detected {} pieces (max {}), skipping invalid detection",
 						p.len(),
-						crate::detection::MAX_PIECES
+						crate::vision::detector::MAX_PIECES
 					);
 					Vec::new()
 				} else {
@@ -158,7 +158,7 @@ fn run_detection_loop(
 
 		board.playing_as_white = detected_playing_as_white;
 
-		if !pieces.is_empty() && pieces.len() <= crate::detection::MAX_PIECES {
+		if !pieces.is_empty() && pieces.len() <= crate::vision::detector::MAX_PIECES {
 			let mut state_lock = board_state.lock().unwrap();
 			*state_lock = Some((board.clone(), pieces.clone()));
 		}

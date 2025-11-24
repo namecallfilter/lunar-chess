@@ -1,4 +1,7 @@
-use crate::drawing::{BestMove, DetectedBoard, DetectedPiece};
+use crate::{
+	model::detected::{DetectedBoard, DetectedPiece},
+	ui::BestMove,
+};
 
 pub fn detect_board_orientation(board: &DetectedBoard, pieces: &[DetectedPiece]) -> bool {
 	let mut white_bottom = 0;

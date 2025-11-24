@@ -9,8 +9,8 @@ use ort::{
 };
 
 use crate::{
-	board_vision::grid_detection::detect_board_algorithmic,
-	drawing::{DetectedBoard, DetectedPiece},
+	model::detected::{DetectedBoard, DetectedPiece},
+	vision::{board_detection::detect_board_scanline, postprocess},
 };
 
 const PIECE_MODEL_PATH: &str = "models/piece.onnx";
@@ -18,10 +18,6 @@ const YOLO_TARGET_SIZE: u32 = 640;
 const PIECE_CONFIDENCE_THRESHOLD: f32 = 0.75;
 
 pub const MAX_PIECES: usize = 32;
-
-/// FEN notation for piece types (lowercase = black, uppercase = white)
-/// Order: rook, knight, bishop, queen, king, pawn (black), then white
-pub const PIECE_CHARS: [char; 12] = ['r', 'n', 'b', 'q', 'k', 'p', 'R', 'N', 'B', 'Q', 'K', 'P'];
 
 struct ImageBuffers {
 	tensor_array: Array4<f32>,
@@ -66,7 +62,7 @@ impl ChessDetector {
 
 	pub fn detect_board(&self, image: &RgbaImage) -> Result<Option<DetectedBoard>> {
 		let start = std::time::Instant::now();
-		let result = detect_board_algorithmic(image);
+		let result = detect_board_scanline(image);
 		tracing::debug!("Algorithmic board detection took {:?}", start.elapsed());
 		Ok(result)
 	}
@@ -118,7 +114,7 @@ impl ChessDetector {
 
 		let parse_start = std::time::Instant::now();
 		let piece_predictions_view = piece_predictions.view();
-		let detected_pieces_warped = DetectedPiece::from_yolo_output(
+		let detected_pieces_warped = postprocess::from_yolo_output(
 			&piece_predictions_view,
 			YOLO_TARGET_SIZE,
 			YOLO_TARGET_SIZE,

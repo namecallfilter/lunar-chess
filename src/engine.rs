@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::Result;
 
-use crate::{config::CONFIG, error::AnalysisError};
+use crate::{config::CONFIG, errors::AnalysisError};
 
 const ENGINE_PATH: &str = "models/chessbots/lc0.exe";
 const DEFAULT_WEIGHTS_PATH: &str = "models/chessbots/maia-1100.pb.gz";
@@ -66,11 +66,9 @@ impl EngineWrapper {
 	}
 
 	pub fn set_position(&mut self, fen: &str) -> Result<()> {
-		let parsed_fen = fen.parse().map_err(|e| {
-			AnalysisError::InvalidPosition {
-				fen: fen.to_string(),
-				reason: format!("Parse error: {:?}", e),
-			}
+		let parsed_fen = fen.parse().map_err(|e| AnalysisError::InvalidPosition {
+			fen: fen.to_string(),
+			reason: format!("Parse error: {:?}", e),
 		})?;
 
 		self.engine

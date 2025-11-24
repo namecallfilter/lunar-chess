@@ -2,17 +2,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum CaptureError {
-	#[error("No monitors detected on the system")]
-	NoMonitorsFound,
-
-	#[error("Could not identify the primary monitor")]
-	NoPrimaryMonitor,
-
 	#[error("Screen capture failed: {0}")]
 	CaptureFailed(String),
-
-	#[error("Invalid monitor configuration: {0}")]
-	InvalidMonitor(String),
 }
 
 #[derive(Error, Debug)]

@@ -16,8 +16,9 @@ use winit::{
 
 use crate::{
 	config::CONFIG,
-	drawing::board::{
-		DetectedBoard, DetectedPiece, draw_board_outline, draw_chess_grid, draw_move_arrow,
+    model::detected::{DetectedBoard, DetectedPiece},
+	ui::draw_board::{
+		draw_board_outline, draw_chess_grid, draw_move_arrow,
 		draw_piece_labels,
 	},
 };
@@ -136,7 +137,6 @@ impl OverlayWindow {
 							y: bounds.y,
 							width: bounds.width,
 							height: bounds.height,
-							confidence: 1.0,
 							playing_as_white: bounds.playing_as_white,
 						},
 						best_move.from_file,
