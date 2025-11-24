@@ -10,10 +10,11 @@ use crate::{
 	board,
 	capture::ScreenCapture,
 	detection::ChessDetector,
-	drawing::{BoardBounds, SharedBoardState, UserEvent},
+	drawing::{BoardBounds, DetectedBoard, SharedBoardState, UserEvent},
 };
 
 const DETECTION_INTERVAL_SECS: f32 = 0.1;
+const BOARD_DETECTION_INTERVAL_FRAMES: usize = 30;
 
 pub struct DetectionService {
 	thread_handle: Option<JoinHandle<()>>,
@@ -58,6 +59,9 @@ fn run_detection_loop(
 	let mut orientation_detected = false;
 	let mut detected_playing_as_white = true;
 
+	let mut cached_board: Option<DetectedBoard> = None;
+	let mut frames_since_board_detection = BOARD_DETECTION_INTERVAL_FRAMES;
+
 	loop {
 		let loop_start = Instant::now();
 		iteration += 1;
@@ -74,28 +78,47 @@ fn run_detection_loop(
 		};
 		tracing::trace!("Screen capture took {:?}", capture_start.elapsed());
 
-		let board = match detector.detect_board(&image) {
-			Ok(Some(b)) => {
-				tracing::debug!(
-					"Board detected at ({:.0}, {:.0}) size {}x{} (confidence: {:.1}%)",
-					b.x,
-					b.y,
-					b.width,
-					b.height,
-					b.confidence * 100.0
-				);
-				b
+		let board = if cached_board.is_none()
+			|| frames_since_board_detection >= BOARD_DETECTION_INTERVAL_FRAMES
+		{
+			tracing::debug!("Running full board detection (frame {})", iteration);
+			match detector.detect_board(&image) {
+				Ok(Some(b)) => {
+					tracing::debug!(
+						"Board detected at ({:.0}, {:.0}) size {}x{} (confidence: {:.1}%)",
+						b.x,
+						b.y,
+						b.width,
+						b.height,
+						b.confidence * 100.0
+					);
+					cached_board = Some(b.clone());
+					frames_since_board_detection = 0;
+					Some(b)
+				}
+				Ok(None) => {
+					tracing::debug!("No board detected in current frame");
+					cached_board = None;
+					None
+				}
+				Err(e) => {
+					tracing::error!("Board detection failed: {}", e);
+					cached_board = None;
+					None
+				}
 			}
-			Ok(None) => {
-				tracing::debug!("No board detected in current frame");
+		} else {
+			tracing::trace!("Using cached board detection");
+			frames_since_board_detection += 1;
+			cached_board.clone()
+		};
+
+		let board = match board {
+			Some(b) => b,
+			None => {
 				proxy
 					.send_event(UserEvent::UpdateDetections(None, Vec::new()))
 					.ok();
-				thread::sleep(Duration::from_secs_f32(DETECTION_INTERVAL_SECS));
-				continue;
-			}
-			Err(e) => {
-				tracing::error!("Board detection failed: {}", e);
 				thread::sleep(Duration::from_secs_f32(DETECTION_INTERVAL_SECS));
 				continue;
 			}
@@ -133,7 +156,6 @@ fn run_detection_loop(
 			);
 		}
 
-		// Apply the detected orientation to every board
 		board.playing_as_white = detected_playing_as_white;
 
 		if !pieces.is_empty() && pieces.len() <= crate::detection::MAX_PIECES {
@@ -158,6 +180,10 @@ fn run_detection_loop(
 		let total_time = loop_start.elapsed();
 		tracing::debug!("Iteration completed in {:?}", total_time);
 
-		thread::sleep(Duration::from_secs_f32(DETECTION_INTERVAL_SECS));
+		if total_time.as_secs_f32() < DETECTION_INTERVAL_SECS {
+			thread::sleep(Duration::from_secs_f32(
+				DETECTION_INTERVAL_SECS - total_time.as_secs_f32(),
+			));
+		}
 	}
 }

@@ -1,5 +1,5 @@
-pub mod analysis;
-pub mod detection;
+mod analysis;
+mod detection;
 
 pub use analysis::AnalysisService;
 pub use detection::DetectionService;

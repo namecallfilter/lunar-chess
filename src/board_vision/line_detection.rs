@@ -1,5 +1,7 @@
 use std::f32::consts::PI;
 
+use rayon::prelude::*;
+
 const ANGLE_TOLERANCE: f32 = PI / 60.0;
 const HORIZONTAL_MIN: f32 = PI / 60.0;
 const HORIZONTAL_MAX: f32 = 59.0 * PI / 60.0;
@@ -43,7 +45,6 @@ impl HoughLine {
 
 pub struct LineDetector {
 	width: usize,
-	height: usize,
 	rho_resolution: f32,
 	theta_resolution: f32,
 	max_rho: f32,
@@ -66,7 +67,6 @@ impl LineDetector {
 
 		Self {
 			width,
-			height,
 			rho_resolution: 1.0,
 			theta_resolution,
 			max_rho,
@@ -88,29 +88,36 @@ impl LineDetector {
 
 		let mut accumulator = vec![0usize; num_thetas * num_rhos];
 
-		let edge_count = edges.iter().filter(|&&e| e).count();
-		tracing::debug!("Processing {} edge pixels", edge_count);
+		let edge_pixels: Vec<(f32, f32)> = edges
+			.iter()
+			.enumerate()
+			.filter(|&(_, &e)| e)
+			.map(|(idx, _)| ((idx % self.width) as f32, (idx / self.width) as f32))
+			.collect();
 
-		for y in 0..self.height {
-			for x in 0..self.width {
-				let idx = y * self.width + x;
-				if !edges[idx] {
-					continue;
-				}
+		tracing::debug!("Processing {} edge pixels", edge_pixels.len());
 
-				let xf = x as f32;
-				let yf = y as f32;
+		let rho_resolution = self.rho_resolution;
+		let max_rho = self.max_rho;
+		let cos_table = &self.cos_table;
+		let sin_table = &self.sin_table;
 
-				for theta_idx in 0..num_thetas {
-					let rho = xf * self.cos_table[theta_idx] + yf * self.sin_table[theta_idx];
-					let rho_idx = ((rho + self.max_rho) / self.rho_resolution) as usize;
+		accumulator
+			.par_chunks_mut(num_rhos)
+			.enumerate()
+			.for_each(|(theta_idx, rho_slice)| {
+				let cos_theta = cos_table[theta_idx];
+				let sin_theta = sin_table[theta_idx];
+
+				for &(x, y) in &edge_pixels {
+					let rho = x * cos_theta + y * sin_theta;
+					let rho_idx = ((rho + max_rho) / rho_resolution) as usize;
 
 					if rho_idx < num_rhos {
-						accumulator[theta_idx * num_rhos + rho_idx] += 1;
+						rho_slice[rho_idx] += 1;
 					}
 				}
-			}
-		}
+			});
 
 		let mut lines = Vec::new();
 		for theta_idx in 0..num_thetas {

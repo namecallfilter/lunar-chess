@@ -24,7 +24,7 @@ fn main() -> Result<()> {
 				.add_directive(
 					format!("lunar_chess={}", CONFIG.debugging.level)
 						.parse()
-						.unwrap(),
+						.unwrap_or_else(|_| tracing_subscriber::filter::LevelFilter::INFO.into()),
 				)
 				.add_directive(tracing::Level::WARN.into()),
 		)

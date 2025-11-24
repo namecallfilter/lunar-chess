@@ -1,12 +1,17 @@
 [engine]
+# engine_path = "models/chessbots/lc0.exe"
+# engine_args = "--weights=models/chessbots/maia-1100.pb.gz"
 threads = 6
 hash = 256
 multi_pv = 3
-nodes = 3
+nodes = 10
 
 [detection]
+# piece_path = "models/piece.onnx"
 edge_threshold = 50
 hough_threshold = 300
 
 [debugging]
-level = "info"
+level = "trace"
+show_grid = true
+show_piece_labels = true

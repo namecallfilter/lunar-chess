@@ -486,7 +486,7 @@ fn nms_pieces(mut pieces: Vec<DetectedPiece>, iou_threshold: f32) -> Vec<Detecte
 		return pieces;
 	}
 
-	pieces.sort_unstable_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+	pieces.sort_unstable_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
 
 	let mut keep = Vec::with_capacity(pieces.len());
 	let mut suppressed = vec![false; pieces.len()];

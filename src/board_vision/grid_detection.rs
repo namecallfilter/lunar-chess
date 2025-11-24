@@ -8,9 +8,9 @@ use super::{
 use crate::{config::CONFIG, drawing::DetectedBoard};
 
 const MIN_CHESSBOARD_LINES: usize = 9;
-const ASPECT_RATIO_MIN: f32 = 0.8;
-const ASPECT_RATIO_MAX: f32 = 1.2;
-const SIZE_RATIO_TOLERANCE: f32 = 1.10;
+const ASPECT_RATIO_MIN: f32 = 0.7;
+const ASPECT_RATIO_MAX: f32 = 1.3;
+const SIZE_RATIO_TOLERANCE: f32 = 1.30;
 
 #[derive(Debug, Clone)]
 pub struct Grid {
@@ -144,7 +144,9 @@ fn find_chess_grid(
 					let size_ratio = h_span.max(v_span) / h_span.min(v_span);
 
 					if size_ratio <= SIZE_RATIO_TOLERANCE {
-						let combined_score = h_score + v_score;
+						// Penalize grids that aren't perfectly square
+						let squareness_factor = 1.0 - (size_ratio - 1.0).abs();
+						let combined_score = (h_score + v_score) * squareness_factor;
 
 						if combined_score > best_combined_score {
 							best_combined_score = combined_score;
@@ -219,7 +221,7 @@ fn find_evenly_spaced_lines(
 	}
 
 	let mut sorted_lines = lines.to_vec();
-	sorted_lines.sort_unstable_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap());
+	sorted_lines.sort_unstable_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap_or(std::cmp::Ordering::Equal));
 
 	let direction = if is_horizontal {
 		"horizontal"
@@ -237,9 +239,9 @@ fn find_evenly_spaced_lines(
 	lines_by_strength.sort_unstable_by(|a, b| b.votes.cmp(&a.votes));
 
 	let vote_threshold_ratio = if sorted_lines.len() <= n + 5 {
-		0.65
+		0.4
 	} else {
-		0.75
+		0.5
 	};
 
 	let vote_threshold = if let Some(strongest) = lines_by_strength.first() {
@@ -254,7 +256,7 @@ fn find_evenly_spaced_lines(
 		.copied()
 		.collect();
 
-	strong_lines.sort_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap());
+	strong_lines.sort_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap_or(std::cmp::Ordering::Equal));
 
 	tracing::debug!(
 		"Filtered to {} strong lines (vote threshold: {} @ {:.0}%)",
@@ -324,7 +326,7 @@ fn find_evenly_spaced_lines(
 		}
 	}
 
-	selected_lines.sort_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap());
+	selected_lines.sort_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap_or(std::cmp::Ordering::Equal));
 
 	if selected_lines.len() != n {
 		tracing::debug!("Selected {} lines, but need {}", selected_lines.len(), n);
@@ -354,15 +356,15 @@ fn find_evenly_spaced_lines_with_target_span(
 	}
 
 	let mut sorted_lines = lines.to_vec();
-	sorted_lines.sort_unstable_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap());
+	sorted_lines.sort_unstable_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap_or(std::cmp::Ordering::Equal));
 
 	let mut lines_by_strength = sorted_lines.clone();
 	lines_by_strength.sort_unstable_by(|a, b| b.votes.cmp(&a.votes));
 
 	let vote_threshold_ratio = if sorted_lines.len() <= n + 5 {
-		0.65
+		0.4
 	} else {
-		0.75
+		0.5
 	};
 	let vote_threshold = if let Some(strongest) = lines_by_strength.first() {
 		(strongest.votes as f32 * vote_threshold_ratio) as usize
@@ -507,11 +509,11 @@ fn get_all_grid_subsets(
 	}
 
 	let mut sorted_lines = lines.to_vec();
-	sorted_lines.sort_unstable_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap());
+	sorted_lines.sort_unstable_by(|a, b| a.rho.partial_cmp(&b.rho).unwrap_or(std::cmp::Ordering::Equal));
 
 	let mut votes_for_percentile: Vec<usize> = sorted_lines.iter().map(|l| l.votes).collect();
 	votes_for_percentile.sort_unstable();
-	let vote_threshold = votes_for_percentile[votes_for_percentile.len() / 2];
+	let vote_threshold = votes_for_percentile[votes_for_percentile.len() / 4];
 
 	let strong_lines: Vec<HoughLine> = sorted_lines
 		.into_iter()
@@ -564,8 +566,8 @@ fn get_all_grid_subsets(
 		let first_line_votes = subset.first().unwrap().votes;
 		let last_line_votes = subset.last().unwrap().votes;
 
-		if (first_line_votes as f32) < (median_votes as f32 * 0.70)
-			|| (last_line_votes as f32) < (median_votes as f32 * 0.70)
+		if (first_line_votes as f32) < (median_votes as f32 * 0.40)
+			|| (last_line_votes as f32) < (median_votes as f32 * 0.40)
 		{
 			tracing::trace!(
 				"Subset [{}-{}]: rejected - edge lines too weak (first={}, last={}, median={})",
@@ -586,10 +588,7 @@ fn get_all_grid_subsets(
 		let vote_score = (total_votes as f32 / 10000.0).min(1.0);
 		let spacing_uniformity_score = 1.0 / (1.0 + spacing_quality / 100.0);
 
-		let expected_spacing_score = 1.0 / (1.0 + ((avg_spacing - 153.0).abs() / 20.0));
-
-		let score =
-			vote_score * 0.15 + spacing_uniformity_score * 0.15 + expected_spacing_score * 0.7;
+		let score = vote_score * 0.3 + spacing_uniformity_score * 0.7;
 
 		tracing::trace!(
 			"Subset [{}-{}]: span={:.1}, spacing={:.1}, votes={}, quality={:.2}, score={:.3}",
@@ -623,9 +622,7 @@ fn get_all_grid_subsets(
 
 			let vote_score = (total_votes as f32 / 10000.0).min(1.0);
 			let spacing_uniformity_score = 1.0 / (1.0 + spacing_quality / 100.0);
-			let expected_spacing_score = 1.0 / (1.0 + ((avg_spacing - 153.0).abs() / 20.0));
-			let score =
-				vote_score * 0.15 + spacing_uniformity_score * 0.15 + expected_spacing_score * 0.7;
+			let score = vote_score * 0.3 + spacing_uniformity_score * 0.7;
 
 			tracing::debug!(
 				"Grid-fitting found subset: span={:.1}, spacing={:.1}, votes={}, quality={:.2}, score={:.3}",
@@ -712,33 +709,26 @@ fn calculate_grid_confidence(grid: &Grid, _width: usize, _height: usize) -> f32 
 
 fn dilate_edges(edges: &[bool], width: usize, height: usize, radius: usize) -> Vec<bool> {
 	let mut dilated = vec![false; edges.len()];
+	let r_isize = radius as isize;
+	let h_isize = height as isize;
+	let w_isize = width as isize;
 
 	for y in 0..height {
 		for x in 0..width {
-			let idx = y * width + x;
-
-			if edges[idx] {
-				dilated[idx] = true;
-				continue;
-			}
-
-			let mut found_edge = false;
-			'outer: for dy in -(radius as isize)..=(radius as isize) {
-				for dx in -(radius as isize)..=(radius as isize) {
+			if edges[y * width + x] {
+				for dy in -r_isize..=r_isize {
 					let ny = y as isize + dy;
-					let nx = x as isize + dx;
-
-					if ny >= 0 && ny < height as isize && nx >= 0 && nx < width as isize {
-						let neighbor_idx = (ny as usize) * width + (nx as usize);
-						if edges[neighbor_idx] {
-							found_edge = true;
-							break 'outer;
+					if ny >= 0 && ny < h_isize {
+						let row_offset = (ny as usize) * width;
+						for dx in -r_isize..=r_isize {
+							let nx = x as isize + dx;
+							if nx >= 0 && nx < w_isize {
+								dilated[row_offset + (nx as usize)] = true;
+							}
 						}
 					}
 				}
 			}
-
-			dilated[idx] = found_edge;
 		}
 	}
 

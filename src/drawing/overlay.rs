@@ -14,9 +14,12 @@ use winit::{
 	window::{Window, WindowId, WindowLevel},
 };
 
-use crate::drawing::board::{
-	DetectedBoard, DetectedPiece, draw_board_outline, draw_chess_grid, draw_move_arrow,
-	draw_piece_labels,
+use crate::{
+	config::CONFIG,
+	drawing::board::{
+		DetectedBoard, DetectedPiece, draw_board_outline, draw_chess_grid, draw_move_arrow,
+		draw_piece_labels,
+	},
 };
 
 const DEFAULT_SCREEN_WIDTH: u32 = 1920;
@@ -105,10 +108,14 @@ impl OverlayWindow {
 		if let (Some(dt), Some(bounds)) = (&mut self.draw_target, self.board_bounds) {
 			dt.clear(SolidSource::from_unpremultiplied_argb(0, 0, 0, 0));
 
-			draw_board_outline(dt, bounds.x, bounds.y, bounds.width, bounds.height);
-			draw_chess_grid(dt, bounds.x, bounds.y, bounds.width, bounds.height);
+			if CONFIG.debugging.show_grid {
+				draw_board_outline(dt, bounds.x, bounds.y, bounds.width, bounds.height);
+				draw_chess_grid(dt, bounds.x, bounds.y, bounds.width, bounds.height);
+			}
 
-			draw_piece_labels(dt, &self.pieces);
+			if CONFIG.debugging.show_piece_labels {
+				draw_piece_labels(dt, &self.pieces);
+			}
 
 			if !self.best_moves.is_empty() {
 				for (index, best_move) in self.best_moves.iter().enumerate() {
@@ -147,7 +154,13 @@ impl OverlayWindow {
 		if let (Some(surface), Some(dt)) = (&mut self.surface, &self.draw_target) {
 			let data = dt.get_data();
 
-			let mut buffer = surface.buffer_mut().unwrap();
+			let mut buffer = match surface.buffer_mut() {
+				Ok(b) => b,
+				Err(e) => {
+					tracing::error!("Failed to get surface buffer: {}", e);
+					return;
+				}
+			};
 
 			for (i, pixel) in data.iter().enumerate() {
 				if i < buffer.len() {
@@ -155,7 +168,9 @@ impl OverlayWindow {
 				}
 			}
 
-			buffer.present().unwrap();
+			if let Err(e) = buffer.present() {
+				tracing::error!("Failed to present buffer: {}", e);
+			}
 		}
 	}
 }
@@ -190,28 +205,29 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 
 	fn resumed(&mut self, event_loop: &ActiveEventLoop) {
 		if self.window.is_none() {
-			let window = Rc::new(
-				event_loop
-					.create_window(
-						Window::default_attributes()
-							.with_title("Lunar Chess Overlay")
-							.with_transparent(true)
-							.with_decorations(false)
-							.with_visible(true)
-							.with_inner_size(PhysicalSize::new(
-								self.screen_width,
-								self.screen_height,
-							))
-							.with_window_level(WindowLevel::AlwaysOnTop)
-							.with_position(PhysicalPosition::new(0, 0)),
-					)
-					.unwrap(),
-			);
+			let window_attributes = Window::default_attributes()
+				.with_title("Lunar Chess Overlay")
+				.with_transparent(true)
+				.with_decorations(false)
+				.with_visible(true)
+				.with_inner_size(PhysicalSize::new(self.screen_width, self.screen_height))
+				.with_window_level(WindowLevel::AlwaysOnTop)
+				.with_position(PhysicalPosition::new(0, 0));
+
+			let window = match event_loop.create_window(window_attributes) {
+				Ok(w) => Rc::new(w),
+				Err(e) => {
+					tracing::error!("Failed to create window: {}", e);
+					return;
+				}
+			};
 
 			#[cfg(target_os = "windows")]
 			{
 				use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-				window.set_cursor_hittest(false).unwrap();
+				if let Err(e) = window.set_cursor_hittest(false) {
+					tracing::warn!("Failed to set cursor hittest: {}", e);
+				}
 
 				unsafe {
 					use windows::Win32::{
@@ -221,23 +237,50 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 						},
 					};
 
-					if let RawWindowHandle::Win32(handle) = window.window_handle().unwrap().as_raw()
-					{
-						let hwnd = HWND(handle.hwnd.get() as *mut _);
-						SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE).ok();
+					match window.window_handle() {
+						Ok(handle) => {
+							if let RawWindowHandle::Win32(handle) = handle.as_raw() {
+								let hwnd = HWND(handle.hwnd.get() as *mut _);
+								let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+							}
+						}
+						Err(e) => tracing::warn!("Failed to get window handle: {}", e),
 					}
 				}
 			}
 
-			let context = softbuffer::Context::new(window.clone()).unwrap();
-			let mut surface = softbuffer::Surface::new(&context, window.clone()).unwrap();
+			let context = match softbuffer::Context::new(window.clone()) {
+				Ok(c) => c,
+				Err(e) => {
+					tracing::error!("Failed to create softbuffer context: {}", e);
+					return;
+				}
+			};
 
-			surface
-				.resize(
-					NonZeroU32::new(self.screen_width).unwrap(),
-					NonZeroU32::new(self.screen_height).unwrap(),
-				)
-				.unwrap();
+			let mut surface = match softbuffer::Surface::new(&context, window.clone()) {
+				Ok(s) => s,
+				Err(e) => {
+					tracing::error!("Failed to create softbuffer surface: {}", e);
+					return;
+				}
+			};
+
+			if let (Some(width), Some(height)) = (
+				NonZeroU32::new(self.screen_width),
+				NonZeroU32::new(self.screen_height),
+			) {
+				if let Err(e) = surface.resize(width, height) {
+					tracing::error!("Failed to resize surface: {}", e);
+					return;
+				}
+			} else {
+				tracing::error!(
+					"Invalid screen dimensions: {}x{}",
+					self.screen_width,
+					self.screen_height
+				);
+				return;
+			}
 
 			self.draw_target = Some(DrawTarget::new(
 				self.screen_width as i32,
@@ -264,13 +307,14 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 				self.render();
 			}
 			WindowEvent::Resized(size) => {
-				if let Some(surface) = &mut self.surface {
-					surface
-						.resize(
-							NonZeroU32::new(size.width).unwrap(),
-							NonZeroU32::new(size.height).unwrap(),
-						)
-						.unwrap();
+				if let (Some(surface), Some(width), Some(height)) = (
+					&mut self.surface,
+					NonZeroU32::new(size.width),
+					NonZeroU32::new(size.height),
+				) {
+					surface.resize(width, height).unwrap_or_else(|e| {
+						tracing::error!("Failed to resize surface: {}", e);
+					});
 				}
 
 				self.draw_target = Some(DrawTarget::new(size.width as i32, size.height as i32));

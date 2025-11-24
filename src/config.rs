@@ -26,6 +26,8 @@ pub struct EngineConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DebuggingConfig {
 	pub level: String,
+	pub show_grid: bool,
+	pub show_piece_labels: bool,
 }
 
 pub static CONFIG: Lazy<Config> =

@@ -1,8 +1,0 @@
-uv run get_pieces.py
-
-uv run gen_pieces_data.py --count 3000 --save-boards
-uv run gen_board_data.py --count 3000
-
-uv run train.py --task both --epochs 50 --batch 16
-
-uv run yolo_inference.py --board-model runs/detect/board_detector/weights/best.pt --piece-model runs/detect/piece_detector/weights/best.pt --image screenshot.png --show

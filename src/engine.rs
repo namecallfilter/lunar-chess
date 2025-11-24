@@ -66,9 +66,16 @@ impl EngineWrapper {
 	}
 
 	pub fn set_position(&mut self, fen: &str) -> Result<()> {
+		let parsed_fen = fen.parse().map_err(|e| {
+			AnalysisError::InvalidPosition {
+				fen: fen.to_string(),
+				reason: format!("Parse error: {:?}", e),
+			}
+		})?;
+
 		self.engine
 			.send(&ruci::Position::Fen {
-				fen: Cow::Owned(fen.parse().unwrap()),
+				fen: Cow::Owned(parsed_fen),
 				moves: Cow::Borrowed(&[]),
 			})
 			.map_err(|e| {
