@@ -20,11 +20,11 @@ pub struct InnerCapture {
 
 impl ScreenCapture {
 	pub fn new() -> Result<Self> {
-		tracing::info!("Initializing Windows High-Performance Capture...");
+		tracing::debug!("Initializing screen capture...");
 
 		let (inner, width, height) = windows::init_capture()?;
 
-		tracing::debug!("Capture initialized for {}x{}", width, height);
+		tracing::debug!("Capture ready ({}x{})", width, height);
 
 		Ok(Self { inner })
 	}

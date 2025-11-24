@@ -10,8 +10,8 @@ use crate::{
 };
 
 const ANALYSIS_INTERVAL_SECS: u64 = 2;
-const STOCKFISH_RESTART_DELAY_SECS: u64 = 1;
-const STOCKFISH_INIT_RETRY_DELAY_SECS: u64 = 5;
+const ENGINE_RESTART_DELAY_SECS: u64 = 1;
+const ENGINE_INIT_RETRY_DELAY_SECS: u64 = 5;
 
 pub struct AnalysisService {
 	thread_handle: Option<JoinHandle<()>>,
@@ -45,11 +45,11 @@ fn run_analysis_loop(
 	let mut last_analyzed_fen: Option<String> = None;
 
 	loop {
-		let stockfish_result = EngineWrapper::new();
+		let engine_result = EngineWrapper::new();
 
-		match stockfish_result {
-			Ok(mut stockfish) => {
-				tracing::info!("Stockfish analysis thread ready");
+		match engine_result {
+			Ok(mut engine) => {
+				tracing::info!("Analysis engine ready");
 
 				loop {
 					thread::sleep(Duration::from_secs(ANALYSIS_INTERVAL_SECS));
@@ -60,34 +60,21 @@ fn run_analysis_loop(
 						let fen = board::to_fen(&board, &pieces);
 
 						if last_analyzed_fen.as_ref() == Some(&fen) {
-							tracing::trace!("Position unchanged, skipping analysis");
 							continue;
 						}
 
-						match stockfish.set_position(&fen) {
-							Ok(_) => {
-								tracing::trace!("Position set successfully");
-							}
+						match engine.set_position(&fen) {
+							Ok(_) => {}
 							Err(e) => {
-								tracing::error!("Stockfish error on position '{}': {:?}", fen, e);
-								tracing::warn!("Stockfish may have crashed, restarting...");
+								tracing::warn!("Engine error on position '{}': {:?}", fen, e);
+								tracing::debug!("Engine may have crashed, restarting...");
 								break;
 							}
 						}
 
-						match stockfish.get_best_moves() {
+						match engine.get_best_moves() {
 							Ok(moves_with_scores) => {
 								if !moves_with_scores.is_empty() {
-									tracing::info!(
-										"Top {} moves: {}",
-										moves_with_scores.len(),
-										moves_with_scores
-											.iter()
-											.map(|m| format!("{} ({})", m.move_str, m.score))
-											.collect::<Vec<_>>()
-											.join(", ")
-									);
-
 									let best_moves: Vec<BestMove> = moves_with_scores
 										.iter()
 										.filter_map(|m| {
@@ -109,23 +96,24 @@ fn run_analysis_loop(
 								last_analyzed_fen = Some(fen);
 							}
 							Err(e) => {
-								tracing::error!("Failed to get best moves: {:?}", e);
-								tracing::warn!("Stockfish may have crashed, restarting...");
+								tracing::warn!("Failed to get best moves: {:?}", e);
+								tracing::debug!("Engine may have crashed, restarting...");
 								break;
 							}
 						}
-					} else {
-						tracing::trace!("No board state available for analysis");
 					}
 				}
 
-				tracing::warn!("Stockfish crashed, attempting restarting...");
-				thread::sleep(Duration::from_secs(STOCKFISH_RESTART_DELAY_SECS));
+				tracing::warn!("Engine crashed, restarting...");
+				thread::sleep(Duration::from_secs(ENGINE_RESTART_DELAY_SECS));
 			}
 			Err(e) => {
-				tracing::error!("Failed to initialize Stockfish: {}", e);
-				tracing::warn!("Retrying Stockfish initialization in 5 seconds...");
-				thread::sleep(Duration::from_secs(STOCKFISH_INIT_RETRY_DELAY_SECS));
+				tracing::error!(
+					"Failed to initialize engine: {}. Retrying in {}s",
+					e,
+					ENGINE_INIT_RETRY_DELAY_SECS
+				);
+				thread::sleep(Duration::from_secs(ENGINE_INIT_RETRY_DELAY_SECS));
 			}
 		}
 	}

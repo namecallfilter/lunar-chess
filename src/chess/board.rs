@@ -33,11 +33,6 @@ pub fn to_fen(board: &DetectedBoard, pieces: &[DetectedPiece]) -> String {
 			&& rank < 8
 		{
 			if chess_board[rank as usize][file as usize].is_some() {
-				tracing::warn!(
-					"Duplicate piece detected at ({}, {}), keeping first one",
-					file,
-					rank
-				);
 				continue;
 			}
 
@@ -88,7 +83,6 @@ pub fn to_fen(board: &DetectedBoard, pieces: &[DetectedPiece]) -> String {
 
 	fen.push_str(&format!(" {} - - 0 1", active_color));
 
-	tracing::debug!("Generated FEN: {}", fen);
 	fen
 }
 

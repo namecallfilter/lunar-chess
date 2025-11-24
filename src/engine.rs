@@ -8,11 +8,7 @@ use anyhow::Result;
 
 use crate::{config::CONFIG, errors::AnalysisError};
 
-const ENGINE_PATH: &str = "models/chessbots/lc0.exe";
-const DEFAULT_WEIGHTS_PATH: &str = "models/chessbots/maia-1100.pb.gz";
-
 const MATE_SCORE_BASE: i32 = 10000;
-// const MATE_DISTANCE_PENALTY: i32 = 10;
 
 // TODO: Support mac and linux engine
 
@@ -28,14 +24,13 @@ pub struct EngineWrapper {
 
 impl EngineWrapper {
 	pub fn new() -> Result<Self> {
-		tracing::debug!("Engine binary found at {}", ENGINE_PATH);
-		tracing::info!("Starting engine...");
+		tracing::debug!("Loading engine from {}", CONFIG.engine.path);
 
-		let mut process = Command::new(ENGINE_PATH)
-			.arg(format!("--weights={}", DEFAULT_WEIGHTS_PATH))
+		let mut process = Command::new(&CONFIG.engine.path)
+			.args(&CONFIG.engine.args)
 			.stdout(Stdio::piped())
 			.stdin(Stdio::piped())
-			.stderr(Stdio::null())
+			// .stderr(Stdio::null())
 			.spawn()
 			.map_err(|e| AnalysisError::EngineStartFailed(e.to_string()))?;
 
@@ -60,7 +55,12 @@ impl EngineWrapper {
 			value: Some(CONFIG.engine.hash.to_string().into()),
 		})?;
 
-		tracing::info!("Engine started successfully with config: {:?}", CONFIG);
+		tracing::debug!(
+			"Engine configured: threads={}, hash={}MB, multi_pv={}",
+			CONFIG.engine.threads,
+			CONFIG.engine.hash,
+			CONFIG.engine.multi_pv
+		);
 
 		Ok(Self { engine })
 	}
@@ -90,7 +90,7 @@ impl EngineWrapper {
 
 		self.engine.go(
 			&ruci::Go {
-				nodes: Some(CONFIG.engine.nodes),
+				move_time: Some(CONFIG.engine.move_time),
 				..Default::default()
 			},
 			|info| {

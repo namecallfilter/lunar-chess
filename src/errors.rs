@@ -8,7 +8,7 @@ pub enum CaptureError {
 
 #[derive(Error, Debug)]
 pub enum AnalysisError {
-	#[error("Failed to start Stockfish engine: {0}")]
+	#[error("Failed to start engine: {0}")]
 	EngineStartFailed(String),
 
 	#[error("Invalid FEN position '{fen}': {reason}")]

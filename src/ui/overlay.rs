@@ -16,11 +16,8 @@ use winit::{
 
 use crate::{
 	config::CONFIG,
-    model::detected::{DetectedBoard, DetectedPiece},
-	ui::draw_board::{
-		draw_board_outline, draw_chess_grid, draw_move_arrow,
-		draw_piece_labels,
-	},
+	model::detected::{DetectedBoard, DetectedPiece},
+	ui::draw_board::{draw_board_outline, draw_chess_grid, draw_move_arrow, draw_piece_labels},
 };
 
 const DEFAULT_SCREEN_WIDTH: u32 = 1920;
@@ -120,8 +117,9 @@ impl OverlayWindow {
 
 			if !self.best_moves.is_empty() {
 				for (index, best_move) in self.best_moves.iter().enumerate() {
-					let opacity =
-						ARROW_BASE_OPACITY.saturating_sub((index as u8) * ARROW_OPACITY_STEP);
+					let opacity = ARROW_BASE_OPACITY.saturating_sub(
+						((index as u16) * (ARROW_OPACITY_STEP as u16)).min(255) as u8,
+					);
 
 					let arrow_color = (
 						opacity,
@@ -157,7 +155,7 @@ impl OverlayWindow {
 			let mut buffer = match surface.buffer_mut() {
 				Ok(b) => b,
 				Err(e) => {
-					tracing::error!("Failed to get surface buffer: {}", e);
+					tracing::warn!("Failed to get surface buffer: {}", e);
 					return;
 				}
 			};
@@ -169,7 +167,7 @@ impl OverlayWindow {
 			}
 
 			if let Err(e) = buffer.present() {
-				tracing::error!("Failed to present buffer: {}", e);
+				tracing::warn!("Failed to present buffer: {}", e);
 			}
 		}
 	}
@@ -217,7 +215,7 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 			let window = match event_loop.create_window(window_attributes) {
 				Ok(w) => Rc::new(w),
 				Err(e) => {
-					tracing::error!("Failed to create window: {}", e);
+					tracing::warn!("Failed to create window: {}", e);
 					return;
 				}
 			};
@@ -226,7 +224,7 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 			{
 				use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 				if let Err(e) = window.set_cursor_hittest(false) {
-					tracing::warn!("Failed to set cursor hittest: {}", e);
+					tracing::debug!("Failed to set cursor hittest: {}", e);
 				}
 
 				unsafe {
@@ -244,7 +242,7 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 								let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
 							}
 						}
-						Err(e) => tracing::warn!("Failed to get window handle: {}", e),
+						Err(e) => tracing::debug!("Failed to get window handle: {}", e),
 					}
 				}
 			}
@@ -252,7 +250,7 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 			let context = match softbuffer::Context::new(window.clone()) {
 				Ok(c) => c,
 				Err(e) => {
-					tracing::error!("Failed to create softbuffer context: {}", e);
+					tracing::warn!("Failed to create softbuffer context: {}", e);
 					return;
 				}
 			};
@@ -260,7 +258,7 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 			let mut surface = match softbuffer::Surface::new(&context, window.clone()) {
 				Ok(s) => s,
 				Err(e) => {
-					tracing::error!("Failed to create softbuffer surface: {}", e);
+					tracing::warn!("Failed to create softbuffer surface: {}", e);
 					return;
 				}
 			};
@@ -270,11 +268,11 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 				NonZeroU32::new(self.screen_height),
 			) {
 				if let Err(e) = surface.resize(width, height) {
-					tracing::error!("Failed to resize surface: {}", e);
+					tracing::warn!("Failed to resize surface: {}", e);
 					return;
 				}
 			} else {
-				tracing::error!(
+				tracing::warn!(
 					"Invalid screen dimensions: {}x{}",
 					self.screen_width,
 					self.screen_height
@@ -313,7 +311,7 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 					NonZeroU32::new(size.height),
 				) {
 					surface.resize(width, height).unwrap_or_else(|e| {
-						tracing::error!("Failed to resize surface: {}", e);
+						tracing::warn!("Failed to resize surface: {}", e);
 					});
 				}
 

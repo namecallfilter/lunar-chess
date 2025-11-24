@@ -42,18 +42,13 @@ fn main() -> Result<()> {
 
 	let init_start = std::time::Instant::now();
 
-	tracing::info!("Initializing screen capture...");
 	let capture = ScreenCapture::new()?;
 	let screen_width = capture.width();
 	let screen_height = capture.height();
-	tracing::info!("Screen resolution: {}x{}", screen_width, screen_height);
 
-	tracing::info!("Starting overlay window...");
-	let overlay_start = std::time::Instant::now();
 	let (event_loop, mut app) = start_overlay(screen_width, screen_height)?;
-	tracing::debug!("Overlay setup took {:?}", overlay_start.elapsed());
 
-	tracing::info!("Initialization complete in {:?}", init_start.elapsed());
+	tracing::info!("Initialized in {:?}", init_start.elapsed());
 
 	let board_state = Arc::new(Mutex::new(
 		Option::<(
@@ -63,15 +58,12 @@ fn main() -> Result<()> {
 	));
 	let board_state_for_analysis = Arc::clone(&board_state);
 
-	tracing::info!("Starting background services...");
-
 	let analysis_proxy = event_loop.create_proxy();
 	let _analysis_service = AnalysisService::spawn(analysis_proxy, board_state_for_analysis);
 
 	let detection_proxy = event_loop.create_proxy();
 	let _detection_service = DetectionService::spawn(detection_proxy, board_state);
 
-	tracing::info!("Running event loop...");
 	event_loop.run_app(&mut app)?;
 
 	Ok(())

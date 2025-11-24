@@ -46,17 +46,14 @@ impl Drop for DetectionService {
 fn run_detection_loop(
 	proxy: winit::event_loop::EventLoopProxy<UserEvent>, board_state: SharedBoardState,
 ) -> Result<()> {
-	tracing::debug!("Detection thread started");
-
 	let capture = ScreenCapture::new()?;
 
 	let mut detector = ChessDetector::new()?;
 
-	tracing::info!(
-		"Detection loop started (polling interval: {}s)",
+	tracing::debug!(
+		"Detection loop started (interval: {}s)",
 		DETECTION_INTERVAL_SECS
 	);
-	let mut iteration = 0;
 	let mut orientation_detected = false;
 	let mut detected_playing_as_white = true;
 
@@ -65,10 +62,7 @@ fn run_detection_loop(
 
 	loop {
 		let loop_start = Instant::now();
-		iteration += 1;
-		tracing::debug!("Detection iteration {}", iteration);
 
-		let capture_start = Instant::now();
 		let image = match capture.capture() {
 			Ok(img) => img,
 			Err(e) => {
@@ -77,38 +71,34 @@ fn run_detection_loop(
 				continue;
 			}
 		};
-		tracing::trace!("Screen capture took {:?}", capture_start.elapsed());
 
 		let board = if cached_board.is_none()
 			|| frames_since_board_detection >= BOARD_DETECTION_INTERVAL_FRAMES
 		{
-			tracing::debug!("Running full board detection (frame {})", iteration);
 			match detector.detect_board(&image) {
 				Ok(Some(b)) => {
 					tracing::debug!(
-						"Board detected at ({:.0}, {:.0}) size {}x{})",
-						b.x,
-						b.y,
-						b.width,
-						b.height,
+						"Board detected at ({}, {}) size {}x{}",
+						b.x as i32,
+						b.y as i32,
+						b.width as i32,
+						b.height as i32
 					);
 					cached_board = Some(b.clone());
 					frames_since_board_detection = 0;
 					Some(b)
 				}
 				Ok(None) => {
-					tracing::debug!("No board detected in current frame");
 					cached_board = None;
 					None
 				}
 				Err(e) => {
-					tracing::error!("Board detection failed: {}", e);
+					tracing::warn!("Board detection failed: {}", e);
 					cached_board = None;
 					None
 				}
 			}
 		} else {
-			tracing::trace!("Using cached board detection");
 			frames_since_board_detection += 1;
 			cached_board.clone()
 		};
@@ -126,21 +116,15 @@ fn run_detection_loop(
 
 		let pieces = match detector.detect_pieces(&image, &board) {
 			Ok(p) => {
-				tracing::debug!("Detected {} pieces on board", p.len());
-
 				if p.len() > crate::vision::detector::MAX_PIECES {
-					tracing::warn!(
-						"Detected {} pieces (max {}), skipping invalid detection",
-						p.len(),
-						crate::vision::detector::MAX_PIECES
-					);
+					tracing::debug!("Too many pieces detected ({}), skipping", p.len());
 					Vec::new()
 				} else {
 					p
 				}
 			}
 			Err(e) => {
-				tracing::error!("Piece detection failed: {}", e);
+				tracing::warn!("Piece detection failed: {}", e);
 				Vec::new()
 			}
 		};
@@ -151,7 +135,7 @@ fn run_detection_loop(
 			detected_playing_as_white = playing_as_white;
 			orientation_detected = true;
 			tracing::info!(
-				"Board orientation detected: playing as {}",
+				"Playing as {}",
 				if playing_as_white { "white" } else { "black" }
 			);
 		}
@@ -163,7 +147,6 @@ fn run_detection_loop(
 			*state_lock = Some((board.clone(), pieces.clone()));
 		}
 
-		let update_start = std::time::Instant::now();
 		let bounds = BoardBounds {
 			x: board.x,
 			y: board.y,
@@ -173,12 +156,10 @@ fn run_detection_loop(
 		};
 
 		if let Err(e) = proxy.send_event(UserEvent::UpdateDetections(Some(bounds), pieces)) {
-			tracing::error!("Failed to send UI update event: {}", e);
+			tracing::warn!("Failed to send UI update: {}", e);
 		}
-		tracing::trace!("UI update event sent in {:?}", update_start.elapsed());
 
 		let total_time = loop_start.elapsed();
-		tracing::debug!("Iteration completed in {:?}", total_time);
 
 		if total_time.as_secs_f32() < DETECTION_INTERVAL_SECS {
 			thread::sleep(Duration::from_secs_f32(

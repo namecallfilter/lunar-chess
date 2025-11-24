@@ -1,4 +1,4 @@
-use image::RgbaImage;
+use image::GrayImage;
 
 use crate::model::detected::DetectedBoard;
 
@@ -10,35 +10,15 @@ const EXPANSION_TOLERANCE: f32 = 0.25;
 const BOARD_RATIO_TOLERANCE: f32 = 0.20;
 const MIN_BOARD_SCREEN_RATIO: f32 = 0.10;
 
-const R_WEIGHT: f32 = 0.299;
-const G_WEIGHT: f32 = 0.587;
-const B_WEIGHT: f32 = 0.114;
-
-pub fn to_grayscale(image: &RgbaImage) -> Vec<u8> {
-	let (width, height) = (image.width(), image.height());
-	let capacity = (width * height) as usize;
-	let mut gray = Vec::with_capacity(capacity);
-
-	for pixel in image.pixels() {
-		let luminosity = (R_WEIGHT * pixel[0] as f32
-			+ G_WEIGHT * pixel[1] as f32
-			+ B_WEIGHT * pixel[2] as f32) as u8;
-		gray.push(luminosity);
-	}
-
-	gray
-}
-
 #[derive(Debug, Clone, Copy)]
 struct Run {
 	len: usize,
 	x_pos: usize,
 }
 
-pub fn detect_board_scanline(image: &RgbaImage) -> Option<DetectedBoard> {
+pub fn detect_board_scanline(image: &GrayImage) -> Option<DetectedBoard> {
 	let width = image.width() as usize;
 	let height = image.height() as usize;
-	let gray = to_grayscale(image);
 
 	let step = 8.max(height / 100);
 
@@ -47,7 +27,7 @@ pub fn detect_board_scanline(image: &RgbaImage) -> Option<DetectedBoard> {
 
 	for y in (0..height).step_by(step) {
 		let row_start = y * width;
-		let row_pixels = &gray[row_start..row_start + width];
+		let row_pixels = &image.as_raw()[row_start..row_start + width];
 
 		let h_runs = get_run_lengths_with_pos(row_pixels);
 
@@ -70,14 +50,13 @@ pub fn detect_board_scanline(image: &RgbaImage) -> Option<DetectedBoard> {
 				}
 
 				let col_pixels: Vec<u8> = (0..height)
-					.map(|y_idx| gray[y_idx * width + check_x])
+					.map(|y_idx| image.as_raw()[y_idx * width + check_x])
 					.collect();
 
 				let v_runs = get_run_lengths_with_pos(&col_pixels);
 
 				if let Some((start_y, end_y, avg_sq_h, _)) = find_and_expand_pattern(&v_runs) {
 					let col_height = (end_y - start_y) as f32;
-
 					let square_ratio = avg_sq_w / avg_sq_h;
 
 					if (0.7..=1.4).contains(&square_ratio) {

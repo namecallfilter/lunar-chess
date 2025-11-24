@@ -10,17 +10,16 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct DetectionConfig {
-	pub edge_threshold: f32,
-	pub hough_threshold: usize,
-}
+pub struct DetectionConfig {}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EngineConfig {
+	pub path: String,
+	pub args: Vec<String>,
 	pub threads: usize,
 	pub hash: usize,
 	pub multi_pv: usize,
-	pub nodes: usize,
+	pub move_time: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -37,7 +36,7 @@ impl Config {
 	pub fn load() -> Result<Self> {
 		let settings = config::Config::builder()
 			.add_source(config::File::with_name("config").required(true))
-			.add_source(config::Environment::with_prefix("LUNAR_CHESS"))
+			.add_source(config::Environment::with_prefix(env!("CARGO_CRATE_NAME")))
 			.build()?;
 
 		settings.try_deserialize().map_err(Into::into)

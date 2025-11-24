@@ -12,7 +12,7 @@ pub fn from_yolo_output(
 ) -> Vec<DetectedPiece> {
 	let shape = predictions.shape();
 	if shape.len() < 3 {
-		tracing::warn!("Invalid YOLO output shape for piece detection");
+		tracing::debug!("Invalid YOLO output shape for piece detection");
 		return Vec::new();
 	}
 

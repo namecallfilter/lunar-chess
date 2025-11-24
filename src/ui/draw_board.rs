@@ -2,6 +2,7 @@ use font_kit::{family_name::FamilyName, properties::Properties, source::SystemSo
 use raqote::{
 	DrawOptions, DrawTarget, PathBuilder, Point, SolidSource, Source, StrokeStyle, Transform,
 };
+
 use crate::model::detected::{DetectedBoard, DetectedPiece};
 
 const BOARD_OUTLINE_WIDTH: f32 = 4.0;
@@ -406,7 +407,7 @@ pub fn draw_piece_labels(dt: &mut DrawTarget, pieces: &[DetectedPiece]) {
 		.ok();
 
 	let Some(Ok(font)) = font else {
-		tracing::warn!("Could not load system font for piece labels");
+		tracing::debug!("Could not load system font for piece labels");
 		return;
 	};
 
