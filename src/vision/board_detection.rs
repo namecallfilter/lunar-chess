@@ -7,8 +7,11 @@ const MIN_RUNS: usize = 5;
 
 const VARIANCE_TOLERANCE: f32 = 0.30;
 const EXPANSION_TOLERANCE: f32 = 0.25;
-const BOARD_RATIO_TOLERANCE: f32 = 0.20;
+const BOARD_RATIO_TOLERANCE: f32 = 0.12;
 const MIN_BOARD_SCREEN_RATIO: f32 = 0.10;
+const MIN_GRID_CONFIDENCE: f32 = 0.75;
+const SQUARE_ASPECT_MIN: f32 = 0.85;
+const SQUARE_ASPECT_MAX: f32 = 1.15;
 
 #[derive(Debug, Clone, Copy)]
 struct Run {
@@ -59,7 +62,7 @@ pub fn detect_board_scanline(image: &GrayImage) -> Option<DetectedBoard> {
 					let col_height = (end_y - start_y) as f32;
 					let square_ratio = avg_sq_w / avg_sq_h;
 
-					if (0.7..=1.4).contains(&square_ratio) {
+					if (SQUARE_ASPECT_MIN..=SQUARE_ASPECT_MAX).contains(&square_ratio) {
 						valid_columns += 1;
 
 						if col_height > max_valid_height {
@@ -74,8 +77,25 @@ pub fn detect_board_scanline(image: &GrayImage) -> Option<DetectedBoard> {
 				let board_ratio = (total_width as f32) / max_valid_height;
 
 				if (1.0 - board_ratio).abs() < BOARD_RATIO_TOLERANCE {
-					let squareness_bonus = if sq_count_h == 8 { 1000.0 } else { 0.0 };
-					let score = (total_width as f32) + squareness_bonus;
+					let grid_confidence = verify_grid_pattern(
+						image,
+						start_x as f32,
+						best_y_start,
+						total_width as f32,
+						max_valid_height,
+					);
+
+					if grid_confidence < MIN_GRID_CONFIDENCE {
+						continue;
+					}
+
+					let squareness_factor = 1.0 - (1.0 - board_ratio).abs();
+
+					let eight_by_eight_bonus = if sq_count_h == 8 { 2.0 } else { 0.5 };
+
+					let score = (total_width as f32)
+						* grid_confidence * squareness_factor
+						* eight_by_eight_bonus;
 
 					if best_candidate.is_none() || score > best_score {
 						best_score = score;
@@ -205,4 +225,81 @@ fn find_and_expand_pattern(runs: &[Run]) -> Option<(usize, usize, f32, usize)> {
 	let final_avg = full_seq_sum as f32 / final_count as f32;
 
 	Some((final_start_x, final_end_x, final_avg, final_count))
+}
+
+fn verify_grid_pattern(image: &GrayImage, x: f32, y: f32, width: f32, height: f32) -> f32 {
+	let img_width = image.width() as usize;
+	let img_height = image.height() as usize;
+	let raw = image.as_raw();
+
+	let cell_width = width / 8.0;
+	let cell_height = height / 8.0;
+
+	let mut cell_values = [[0u8; 8]; 8];
+
+	for (row, cell_row) in cell_values.iter_mut().enumerate() {
+		for (col, cell) in cell_row.iter_mut().enumerate() {
+			let center_x = (x + (col as f32 + 0.5) * cell_width) as usize;
+			let center_y = (y + (row as f32 + 0.5) * cell_height) as usize;
+
+			if center_x >= img_width || center_y >= img_height {
+				return 0.0;
+			}
+
+			*cell = raw[center_y * img_width + center_x];
+		}
+	}
+
+	let mut pattern_a_valid = 0;
+	let mut pattern_b_valid = 0;
+
+	let mut all_values: Vec<u8> = cell_values.iter().flatten().copied().collect();
+	all_values.sort_unstable();
+	let median = all_values[32];
+
+	for (row, cell_row) in cell_values.iter().enumerate() {
+		for (col, &val) in cell_row.iter().enumerate() {
+			let is_light = val > median;
+			let expect_light_a = (row + col) % 2 == 0;
+			let expect_light_b = (row + col) % 2 == 1;
+
+			if is_light == expect_light_a {
+				pattern_a_valid += 1;
+			}
+			if is_light == expect_light_b {
+				pattern_b_valid += 1;
+			}
+		}
+	}
+
+	let best_valid = pattern_a_valid.max(pattern_b_valid);
+
+	let mut adjacent_differ = 0;
+	let mut adjacent_total = 0;
+	let diff_threshold = 15;
+
+	for cell_row in &cell_values {
+		for col in 0..7 {
+			let diff = (cell_row[col] as i16 - cell_row[col + 1] as i16).abs();
+			if diff > diff_threshold {
+				adjacent_differ += 1;
+			}
+			adjacent_total += 1;
+		}
+	}
+
+	for row in 0..7 {
+		for (col, &val) in cell_values[row].iter().enumerate() {
+			let diff = (val as i16 - cell_values[row + 1][col] as i16).abs();
+			if diff > diff_threshold {
+				adjacent_differ += 1;
+			}
+			adjacent_total += 1;
+		}
+	}
+
+	let pattern_confidence = best_valid as f32 / 64.0;
+	let adjacent_confidence = adjacent_differ as f32 / adjacent_total as f32;
+
+	(pattern_confidence + adjacent_confidence) / 2.0
 }
