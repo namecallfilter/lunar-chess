@@ -7,7 +7,7 @@ use anyhow::Result;
 use image::RgbaImage;
 use parking_lot::Mutex;
 
-use crate::errors::CaptureError;
+use crate::{errors::CaptureError, ui::ScreenDimensions};
 
 pub struct ScreenCapture {
 	inner: Arc<InnerCapture>,
@@ -47,13 +47,15 @@ impl DoubleBuffer {
 		RgbaImage::from_raw(self.width, self.height, guard.clone())
 			.expect("Buffer size matches image dimensions")
 	}
+
+	fn dimensions(&self) -> ScreenDimensions {
+		ScreenDimensions::new(self.width, self.height)
+	}
 }
 
 pub struct InnerCapture {
 	double_buffer: DoubleBuffer,
 	ready: std::sync::atomic::AtomicBool,
-	width: u32,
-	height: u32,
 }
 
 // TODO: MacOS and Linux
@@ -79,12 +81,8 @@ impl ScreenCapture {
 		Ok(self.inner.double_buffer.read_image())
 	}
 
-	pub fn width(&self) -> u32 {
-		self.inner.width
-	}
-
-	pub fn height(&self) -> u32 {
-		self.inner.height
+	pub fn dimensions(&self) -> ScreenDimensions {
+		self.inner.double_buffer.dimensions()
 	}
 }
 
@@ -158,8 +156,6 @@ mod windows {
 		let inner = Arc::new(InnerCapture {
 			double_buffer: DoubleBuffer::new(width, height),
 			ready: std::sync::atomic::AtomicBool::new(false),
-			width,
-			height,
 		});
 
 		let settings = Settings::new(

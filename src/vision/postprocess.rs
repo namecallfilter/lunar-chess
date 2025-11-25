@@ -1,15 +1,19 @@
-use crate::model::detected::DetectedPiece;
+use crate::{
+	chess::PieceType,
+	model::{
+		Confidence,
+		detected::{DetectedPiece, Rect},
+	},
+	vision::detector::YOLO_INPUT_SIZE,
+};
 
 const NMS_IOU_THRESHOLD: f32 = 0.7;
 
-/// FEN notation for piece types (lowercase = black, uppercase = white)
-/// Order: rook, knight, bishop, queen, king, pawn (black), then white
-pub const PIECE_CHARS: [char; 12] = ['r', 'n', 'b', 'q', 'k', 'p', 'R', 'N', 'B', 'Q', 'K', 'P'];
-
 pub fn from_yolo_output(
 	predictions: &ndarray::ArrayViewD<f32>, img_width: u32, img_height: u32,
-	confidence_threshold: f32,
+	confidence_threshold: Confidence,
 ) -> Vec<DetectedPiece> {
+	let threshold = confidence_threshold.value();
 	let shape = predictions.shape();
 	if shape.len() < 3 {
 		tracing::debug!("Invalid YOLO output shape for piece detection");
@@ -18,9 +22,8 @@ pub fn from_yolo_output(
 
 	let num_detections = shape[2];
 	let num_classes = shape[1] - 4;
-	let scale_factor = 640.0;
-	let scale_x = img_width as f32 / scale_factor;
-	let scale_y = img_height as f32 / scale_factor;
+	let scale_x = img_width as f32 / YOLO_INPUT_SIZE as f32;
+	let scale_y = img_height as f32 / YOLO_INPUT_SIZE as f32;
 
 	let mut pieces = Vec::new();
 
@@ -41,20 +44,21 @@ pub fn from_yolo_output(
 			}
 		}
 
-		if max_class_conf > confidence_threshold {
+		if max_class_conf > threshold {
+			let Some(piece_type) = PieceType::from_class_index(max_class_idx) else {
+				continue;
+			};
+
 			let x = (x_center - width / 2.0) * scale_x;
 			let y = (y_center - height / 2.0) * scale_y;
 			let w = width * scale_x;
 			let h = height * scale_y;
 
-			pieces.push(DetectedPiece {
-				x,
-				y,
-				width: w,
-				height: h,
-				piece_type: PIECE_CHARS[max_class_idx],
-				confidence: max_class_conf,
-			});
+			pieces.push(DetectedPiece::new(
+				Rect::new(x, y, w, h),
+				piece_type,
+				Confidence::new(max_class_conf),
+			));
 		}
 	}
 
@@ -91,24 +95,24 @@ fn nms_pieces(mut pieces: Vec<DetectedPiece>, iou_threshold: f32) -> Vec<Detecte
 			}
 		}
 
-		keep.push(pieces[i].clone());
+		keep.push(pieces[i]);
 	}
 
 	keep
 }
 
 fn calculate_iou(a: &DetectedPiece, b: &DetectedPiece) -> f32 {
-	let x1_inter = a.x.max(b.x);
-	let y1_inter = a.y.max(b.y);
-	let x2_inter = (a.x + a.width).min(b.x + b.width);
-	let y2_inter = (a.y + a.height).min(b.y + b.height);
+	let x1_inter = a.x().max(b.x());
+	let y1_inter = a.y().max(b.y());
+	let x2_inter = (a.x() + a.width()).min(b.x() + b.width());
+	let y2_inter = (a.y() + a.height()).min(b.y() + b.height());
 
 	let inter_width = (x2_inter - x1_inter).max(0.0);
 	let inter_height = (y2_inter - y1_inter).max(0.0);
 	let inter_area = inter_width * inter_height;
 
-	let area_a = a.width * a.height;
-	let area_b = b.width * b.height;
+	let area_a = a.width() * a.height();
+	let area_b = b.width() * b.height();
 	let union_area = area_a + area_b - inter_area;
 
 	if union_area > 0.0 {

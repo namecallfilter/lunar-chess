@@ -12,13 +12,13 @@ use winit::event_loop::EventLoopProxy;
 
 use crate::{
 	capture::screen::ScreenCapture,
-	chess::board,
-	model::detected::DetectedBoard,
-	ui::{BoardBounds, SharedBoardState, UserEvent},
+	chess::PlayerColor,
+	model::detected::{BoardState, DetectedBoard},
+	ui::{SharedBoardState, UserEvent},
 	vision::detector::ChessDetector,
 };
 
-const DETECTION_INTERVAL_SECS: f32 = 0.1;
+const DETECTION_INTERVAL: Duration = Duration::from_millis(100);
 const BOARD_DETECTION_INTERVAL_FRAMES: usize = 30;
 
 pub struct DetectionService {
@@ -43,7 +43,7 @@ impl DetectionService {
 		}
 	}
 
-	pub fn shutdown(&self) {
+	fn shutdown(&self) {
 		self.shutdown.store(true, Ordering::SeqCst);
 	}
 }
@@ -66,11 +66,10 @@ fn run_detection_loop(
 	let mut detector = ChessDetector::new()?;
 
 	tracing::debug!(
-		"Detection loop started (interval: {}s)",
-		DETECTION_INTERVAL_SECS
+		"Detection loop started (interval: {:?})",
+		DETECTION_INTERVAL
 	);
-	let mut orientation_detected = false;
-	let mut detected_playing_as_white = true;
+	let mut detected_player_color: Option<PlayerColor> = None;
 
 	let mut cached_board: Option<DetectedBoard> = None;
 	let mut frames_since_board_detection = BOARD_DETECTION_INTERVAL_FRAMES;
@@ -82,7 +81,7 @@ fn run_detection_loop(
 			Ok(img) => img,
 			Err(e) => {
 				tracing::error!("Screen capture failed: {}", e);
-				thread::sleep(Duration::from_secs_f32(DETECTION_INTERVAL_SECS));
+				thread::sleep(DETECTION_INTERVAL);
 				continue;
 			}
 		};
@@ -94,13 +93,15 @@ fn run_detection_loop(
 				Ok(Some(b)) => {
 					tracing::debug!(
 						"Board detected at ({}, {}) size {}x{}",
-						b.x as i32,
-						b.y as i32,
-						b.width as i32,
-						b.height as i32
+						b.x() as i32,
+						b.y() as i32,
+						b.width() as i32,
+						b.height() as i32
 					);
-					cached_board = Some(b.clone());
+
+					cached_board = Some(b);
 					frames_since_board_detection = 0;
+
 					Some(b)
 				}
 				Ok(None) => {
@@ -109,13 +110,14 @@ fn run_detection_loop(
 				}
 				Err(e) => {
 					tracing::warn!("Board detection failed: {}", e);
+
 					cached_board = None;
 					None
 				}
 			}
 		} else {
 			frames_since_board_detection += 1;
-			cached_board.clone()
+			cached_board
 		};
 
 		let board = match board {
@@ -124,7 +126,8 @@ fn run_detection_loop(
 				proxy
 					.send_event(UserEvent::UpdateDetections(None, Vec::new()))
 					.ok();
-				thread::sleep(Duration::from_secs_f32(DETECTION_INTERVAL_SECS));
+
+				thread::sleep(DETECTION_INTERVAL);
 				continue;
 			}
 		};
@@ -145,41 +148,30 @@ fn run_detection_loop(
 		};
 
 		let mut board = board;
-		if !pieces.is_empty() && !orientation_detected {
-			let playing_as_white = board::detect_board_orientation(&board, &pieces);
-			detected_playing_as_white = playing_as_white;
-			orientation_detected = true;
-			tracing::info!(
-				"Playing as {}",
-				if playing_as_white { "white" } else { "black" }
-			);
+		if !pieces.is_empty() && detected_player_color.is_none() {
+			let temp_state = BoardState::new(board, pieces.clone());
+			let player_color = temp_state.detect_orientation();
+
+			detected_player_color = Some(player_color);
+
+			tracing::info!("Playing as {}", player_color);
 		}
 
-		board.playing_as_white = detected_playing_as_white;
+		board.player_color = detected_player_color.unwrap_or(PlayerColor::White);
 
 		if !pieces.is_empty() && pieces.len() <= crate::vision::detector::MAX_PIECES {
 			let mut state_lock = board_state.lock();
-			*state_lock = Some((board.clone(), pieces.clone()));
+			*state_lock = Some(BoardState::new(board, pieces.clone()));
 		}
 
-		let bounds = BoardBounds {
-			x: board.x,
-			y: board.y,
-			width: board.width,
-			height: board.height,
-			playing_as_white: board.playing_as_white,
-		};
-
-		if let Err(e) = proxy.send_event(UserEvent::UpdateDetections(Some(bounds), pieces)) {
+		if let Err(e) = proxy.send_event(UserEvent::UpdateDetections(Some(board), pieces)) {
 			tracing::warn!("Failed to send UI update: {}", e);
 		}
 
 		let total_time = loop_start.elapsed();
 
-		if total_time.as_secs_f32() < DETECTION_INTERVAL_SECS {
-			thread::sleep(Duration::from_secs_f32(
-				DETECTION_INTERVAL_SECS - total_time.as_secs_f32(),
-			));
+		if total_time < DETECTION_INTERVAL {
+			thread::sleep(DETECTION_INTERVAL - total_time);
 		}
 	}
 

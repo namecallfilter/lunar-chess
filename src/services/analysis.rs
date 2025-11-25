@@ -8,14 +8,14 @@ use std::{
 };
 
 use crate::{
-	chess::board,
+	chess::{ChessMove, board},
 	engine::EngineWrapper,
-	ui::{BestMove, SharedBoardState, UserEvent},
+	ui::{SharedBoardState, UserEvent},
 };
 
-const ANALYSIS_INTERVAL_SECS: u64 = 2;
-const ENGINE_RESTART_DELAY_SECS: u64 = 1;
-const ENGINE_INIT_RETRY_DELAY_SECS: u64 = 5;
+const ANALYSIS_INTERVAL: Duration = Duration::from_secs(2);
+const ENGINE_RESTART_DELAY: Duration = Duration::from_secs(1);
+const ENGINE_INIT_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 pub struct AnalysisService {
 	thread_handle: Option<JoinHandle<()>>,
@@ -39,7 +39,7 @@ impl AnalysisService {
 		}
 	}
 
-	pub fn shutdown(&self) {
+	fn shutdown(&self) {
 		self.shutdown.store(true, Ordering::SeqCst);
 	}
 }
@@ -67,7 +67,7 @@ fn run_analysis_loop(
 				tracing::info!("Analysis engine ready");
 
 				while !shutdown.load(Ordering::SeqCst) {
-					thread::sleep(Duration::from_secs(ANALYSIS_INTERVAL_SECS));
+					thread::sleep(ANALYSIS_INTERVAL);
 
 					if shutdown.load(Ordering::SeqCst) {
 						break;
@@ -75,8 +75,8 @@ fn run_analysis_loop(
 
 					let current_position = board_state.lock().clone();
 
-					if let Some((board, pieces)) = current_position {
-						let fen = board::to_fen(&board, &pieces);
+					if let Some(state) = current_position {
+						let fen = state.to_fen();
 
 						if last_analyzed_fen.as_ref() == Some(&fen) {
 							continue;
@@ -94,14 +94,16 @@ fn run_analysis_loop(
 						match engine.get_best_moves() {
 							Ok(moves_with_scores) => {
 								if !moves_with_scores.is_empty() {
-									let best_moves: Vec<BestMove> = moves_with_scores
+									let best_moves: Vec<ChessMove> = moves_with_scores
 										.iter()
 										.filter_map(|m| {
-											board::parse_move(&m.move_str, board.playing_as_white)
-												.map(|mut mv| {
-													mv.score = m.score;
-													mv
-												})
+											board::parse_move(
+												m.notation.as_str(),
+												state.board.player_color,
+											)
+											.map(|mv| {
+												ChessMove::with_score(mv.from, mv.to, m.score)
+											})
 										})
 										.collect();
 
@@ -125,16 +127,18 @@ fn run_analysis_loop(
 
 				if !shutdown.load(Ordering::SeqCst) {
 					tracing::warn!("Engine crashed, restarting...");
-					thread::sleep(Duration::from_secs(ENGINE_RESTART_DELAY_SECS));
+
+					thread::sleep(ENGINE_RESTART_DELAY);
 				}
 			}
 			Err(e) => {
 				tracing::error!(
-					"Failed to initialize engine: {}. Retrying in {}s",
+					"Failed to initialize engine: {}. Retrying in {:?}",
 					e,
-					ENGINE_INIT_RETRY_DELAY_SECS
+					ENGINE_INIT_RETRY_DELAY
 				);
-				thread::sleep(Duration::from_secs(ENGINE_INIT_RETRY_DELAY_SECS));
+
+				thread::sleep(ENGINE_INIT_RETRY_DELAY);
 			}
 		}
 	}
