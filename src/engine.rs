@@ -7,7 +7,7 @@ use std::{
 use anyhow::Result;
 
 use crate::{
-	config::{CONFIG, EngineProfile},
+	config::{CONFIG, PROFILE},
 	errors::AnalysisError,
 };
 
@@ -23,16 +23,10 @@ pub struct MoveWithScore {
 
 pub struct EngineWrapper {
 	engine: ruci::Engine<BufReader<ChildStdout>, ChildStdin>,
-	profile: EngineProfile,
 }
 
 impl EngineWrapper {
 	pub fn new() -> Result<Self> {
-		let profile = CONFIG
-			.active_profile()
-			.map_err(|e| AnalysisError::EngineStartFailed(e.to_string()))?
-			.clone();
-
 		tracing::debug!(
 			"Loading engine from {} with profile '{}'",
 			CONFIG.engine.path,
@@ -55,20 +49,20 @@ impl EngineWrapper {
 
 		engine.send(ruci::SetOption {
 			name: "Threads".into(),
-			value: Some(profile.threads.to_string().into()),
+			value: Some(PROFILE.threads.to_string().into()),
 		})?;
 
 		engine.send(ruci::SetOption {
 			name: "Hash".into(),
-			value: Some(profile.hash.to_string().into()),
+			value: Some(PROFILE.hash.to_string().into()),
 		})?;
 
 		engine.send(ruci::SetOption {
 			name: "MultiPV".into(),
-			value: Some(profile.multi_pv.to_string().into()),
+			value: Some(PROFILE.multi_pv.to_string().into()),
 		})?;
 
-		Ok(Self { engine, profile })
+		Ok(Self { engine })
 	}
 
 	pub fn set_position(&mut self, fen: &str) -> Result<()> {
@@ -96,13 +90,14 @@ impl EngineWrapper {
 
 		self.engine.go(
 			&ruci::Go {
-				depth: Some(self.profile.depth),
+				depth: Some(PROFILE.depth),
 				..Default::default()
 			},
 			|info| {
 				let Some(score_with_bound) = info.score else {
 					return;
 				};
+
 				let Some(first_move) = info.pv.first() else {
 					return;
 				};
@@ -132,6 +127,8 @@ impl EngineWrapper {
 				}
 			},
 		)?;
+
+		best_moves.truncate(PROFILE.multi_pv);
 
 		Ok(best_moves)
 	}
