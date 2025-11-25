@@ -1,8 +1,6 @@
 [engine]
-# path = "models/chessbots/lc0.exe"
-# args = ["--weights=models/chessbots/maia-1100.pb.gz"]
-path = "models/chessbots/stockfish.exe"
-args = []
+path = "models/chessbots/lc0.exe"
+args = ["--weights=models/chessbots/maia-1900.pb.gz"]
 profile = "default"
 
 [profiles.default]
