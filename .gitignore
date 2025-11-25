@@ -1,3 +1,5 @@
 **/target
 
 chessbots/
+models/
+config.toml
