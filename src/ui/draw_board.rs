@@ -1,4 +1,6 @@
-use font_kit::{family_name::FamilyName, properties::Properties, source::SystemSource};
+use std::cell::RefCell;
+
+use font_kit::{family_name::FamilyName, font::Font, properties::Properties, source::SystemSource};
 use raqote::{
 	DrawOptions, DrawTarget, PathBuilder, Point, SolidSource, Source, StrokeStyle, Transform,
 };
@@ -24,6 +26,18 @@ const COLOR_GRID_LINES: (u8, u8, u8, u8) = (200, 255, 255, 0); // Yellow
 const COLOR_LABEL_BACKGROUND: (u8, u8, u8, u8) = (180, 50, 50, 50); // Dark gray
 const COLOR_LABEL_WHITE_PIECE: (u8, u8, u8, u8) = (255, 255, 255, 255); // White
 const COLOR_LABEL_BLACK_PIECE: (u8, u8, u8, u8) = (255, 200, 200, 200); // Light gray
+
+thread_local! {
+	static LABEL_FONT: RefCell<Option<Font>> = RefCell::new(
+		SystemSource::new()
+			.select_best_match(
+				&[FamilyName::Title("Arial".into()), FamilyName::SansSerif],
+				&Properties::new(),
+			)
+			.ok()
+			.and_then(|handle| handle.load().ok())
+	);
+}
 
 mod cached_colors {
 	use super::*;
@@ -398,50 +412,44 @@ fn draw_knight_arrow(
 }
 
 pub fn draw_piece_labels(dt: &mut DrawTarget, pieces: &[DetectedPiece]) {
-	let font = SystemSource::new()
-		.select_best_match(
-			&[FamilyName::Title("Arial".into()), FamilyName::SansSerif],
-			&Properties::new(),
-		)
-		.map(|handle| handle.load())
-		.ok();
-
-	let Some(Ok(font)) = font else {
-		tracing::debug!("Could not load system font for piece labels");
-		return;
-	};
-
-	for piece in pieces {
-		let mut pb = PathBuilder::new();
-		pb.rect(piece.x, piece.y, PIECE_LABEL_SIZE, PIECE_LABEL_SIZE);
-		let path = pb.finish();
-
-		dt.fill(
-			&path,
-			&cached_colors::label_background(),
-			&DrawOptions::new(),
-		);
-
-		let text = piece.piece_type.to_string();
-		let color = if piece.piece_type.is_uppercase() {
-			cached_colors::label_white_piece()
-		} else {
-			cached_colors::label_black_piece()
+	LABEL_FONT.with(|font_cell| {
+		let font_ref = font_cell.borrow();
+		let Some(font) = font_ref.as_ref() else {
+			return;
 		};
 
-		dt.set_transform(&Transform::identity());
-		dt.draw_text(
-			&font,
-			PIECE_LABEL_FONT_SIZE,
-			&text,
-			Point::new(
-				piece.x + PIECE_LABEL_OFFSET_X,
-				piece.y + PIECE_LABEL_OFFSET_Y,
-			),
-			&Source::Solid(color),
-			&DrawOptions::new(),
-		);
-	}
+		for piece in pieces {
+			let mut pb = PathBuilder::new();
+			pb.rect(piece.x, piece.y, PIECE_LABEL_SIZE, PIECE_LABEL_SIZE);
+			let path = pb.finish();
 
-	dt.set_transform(&Transform::identity());
+			dt.fill(
+				&path,
+				&cached_colors::label_background(),
+				&DrawOptions::new(),
+			);
+
+			let text = piece.piece_type.to_string();
+			let color = if piece.piece_type.is_uppercase() {
+				cached_colors::label_white_piece()
+			} else {
+				cached_colors::label_black_piece()
+			};
+
+			dt.set_transform(&Transform::identity());
+			dt.draw_text(
+				font,
+				PIECE_LABEL_FONT_SIZE,
+				&text,
+				Point::new(
+					piece.x + PIECE_LABEL_OFFSET_X,
+					piece.y + PIECE_LABEL_OFFSET_Y,
+				),
+				&Source::Solid(color),
+				&DrawOptions::new(),
+			);
+		}
+
+		dt.set_transform(&Transform::identity());
+	});
 }
