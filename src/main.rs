@@ -1,6 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::Result;
+use parking_lot::Mutex;
 
 mod capture;
 mod chess;
