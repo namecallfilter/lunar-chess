@@ -3,15 +3,20 @@
 # args = ["--weights=models/chessbots/maia-1100.pb.gz"]
 path = "models/chessbots/stockfish.exe"
 args = []
-threads = 6
-hash = 256
-multi_pv = 3
-move_time = 1000
+profile = "default"
+
+[profiles.default]
+threads = 8
+hash = 8192
+multi_pv = 6
+depth = 5
 
 [detection]
-# piece_path = "models/piece.onnx"
+path = "models/piece.onnx"
+piece_confidence_threshold = 0.75
 
 [debugging]
 level = "debug"
+stream_proof = true
 show_grid = true
 show_piece_labels = true
