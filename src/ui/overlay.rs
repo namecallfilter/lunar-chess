@@ -237,7 +237,9 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 
 					match window.window_handle() {
 						Ok(handle) => {
-							if let RawWindowHandle::Win32(handle) = handle.as_raw() {
+							if let RawWindowHandle::Win32(handle) = handle.as_raw()
+								&& CONFIG.debugging.stream_proof
+							{
 								let hwnd = HWND(handle.hwnd.get() as *mut _);
 								let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
 							}

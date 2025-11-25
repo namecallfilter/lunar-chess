@@ -9,13 +9,12 @@ use ort::{
 };
 
 use crate::{
+	config::CONFIG,
 	model::detected::{DetectedBoard, DetectedPiece},
 	vision::{board_detection::detect_board_scanline, postprocess},
 };
 
-const PIECE_MODEL_PATH: &str = "models/piece.onnx";
 const YOLO_TARGET_SIZE: u32 = 640;
-const PIECE_CONFIDENCE_THRESHOLD: f32 = 0.75;
 
 pub const MAX_PIECES: usize = 32;
 
@@ -49,7 +48,7 @@ impl ChessDetector {
 		let piece_model = Session::builder()?
 			.with_execution_providers([CUDAExecutionProvider::default().build()])?
 			.with_optimization_level(GraphOptimizationLevel::Level3)?
-			.commit_from_file(PIECE_MODEL_PATH)?;
+			.commit_from_file(&CONFIG.detection.path)?;
 
 		tracing::debug!("Piece detection model loaded");
 
@@ -112,7 +111,7 @@ impl ChessDetector {
 			&piece_predictions_view,
 			YOLO_TARGET_SIZE,
 			YOLO_TARGET_SIZE,
-			PIECE_CONFIDENCE_THRESHOLD,
+			CONFIG.detection.piece_confidence_threshold,
 		);
 
 		let scale_x = board.width / YOLO_TARGET_SIZE as f32;

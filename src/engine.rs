@@ -6,7 +6,10 @@ use std::{
 
 use anyhow::Result;
 
-use crate::{config::CONFIG, errors::AnalysisError};
+use crate::{
+	config::{CONFIG, EngineProfile},
+	errors::AnalysisError,
+};
 
 const MATE_SCORE_BASE: i32 = 10000;
 
@@ -20,17 +23,27 @@ pub struct MoveWithScore {
 
 pub struct EngineWrapper {
 	engine: ruci::Engine<BufReader<ChildStdout>, ChildStdin>,
+	profile: EngineProfile,
 }
 
 impl EngineWrapper {
 	pub fn new() -> Result<Self> {
-		tracing::debug!("Loading engine from {}", CONFIG.engine.path);
+		let profile = CONFIG
+			.active_profile()
+			.map_err(|e| AnalysisError::EngineStartFailed(e.to_string()))?
+			.clone();
+
+		tracing::debug!(
+			"Loading engine from {} with profile '{}'",
+			CONFIG.engine.path,
+			CONFIG.engine.profile
+		);
 
 		let mut process = Command::new(&CONFIG.engine.path)
 			.args(&CONFIG.engine.args)
 			.stdout(Stdio::piped())
 			.stdin(Stdio::piped())
-			// .stderr(Stdio::null())
+			.stderr(Stdio::null())
 			.spawn()
 			.map_err(|e| AnalysisError::EngineStartFailed(e.to_string()))?;
 
@@ -41,28 +54,21 @@ impl EngineWrapper {
 		engine.is_ready()?;
 
 		engine.send(ruci::SetOption {
-			name: "MultiPV".into(),
-			value: Some(CONFIG.engine.multi_pv.to_string().into()),
-		})?;
-
-		engine.send(ruci::SetOption {
 			name: "Threads".into(),
-			value: Some(CONFIG.engine.threads.to_string().into()),
+			value: Some(profile.threads.to_string().into()),
 		})?;
 
 		engine.send(ruci::SetOption {
 			name: "Hash".into(),
-			value: Some(CONFIG.engine.hash.to_string().into()),
+			value: Some(profile.hash.to_string().into()),
 		})?;
 
-		tracing::debug!(
-			"Engine configured: threads={}, hash={}MB, multi_pv={}",
-			CONFIG.engine.threads,
-			CONFIG.engine.hash,
-			CONFIG.engine.multi_pv
-		);
+		engine.send(ruci::SetOption {
+			name: "MultiPV".into(),
+			value: Some(profile.multi_pv.to_string().into()),
+		})?;
 
-		Ok(Self { engine })
+		Ok(Self { engine, profile })
 	}
 
 	pub fn set_position(&mut self, fen: &str) -> Result<()> {
@@ -90,7 +96,7 @@ impl EngineWrapper {
 
 		self.engine.go(
 			&ruci::Go {
-				move_time: Some(CONFIG.engine.move_time),
+				depth: Some(self.profile.depth),
 				..Default::default()
 			},
 			|info| {

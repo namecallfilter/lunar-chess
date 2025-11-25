@@ -18,6 +18,9 @@ use services::{AnalysisService, DetectionService};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 use ui::start_overlay;
 
+// TODO: Auto play
+// TODO: Detect whose turn it is (autoplay only feature?)
+
 fn main() -> Result<()> {
 	tracing_subscriber::registry()
 		.with(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
