@@ -25,8 +25,9 @@ const DEFAULT_SCREEN_HEIGHT: u32 = 1080;
 
 const UI_REDRAW_INTERVAL_MS: u64 = 100;
 
-const ARROW_BASE_OPACITY: u8 = 200;
-const ARROW_OPACITY_STEP: u8 = 60;
+const ARROW_MIN_OPACITY: u8 = 40;
+const ARROW_MAX_OPACITY: u8 = 215;
+
 const COLOR_ARROW_BASE: (u8, u8, u8) = (100, 150, 255); // Blue
 
 #[derive(Debug, Clone)]
@@ -116,10 +117,18 @@ impl OverlayWindow {
 			}
 
 			if !self.best_moves.is_empty() {
-				for (index, best_move) in self.best_moves.iter().enumerate() {
-					let opacity = ARROW_BASE_OPACITY.saturating_sub(
-						((index as u16) * (ARROW_OPACITY_STEP as u16)).min(255) as u8,
-					);
+				let max_score = self.best_moves.iter().map(|m| m.score).max().unwrap_or(0);
+				let min_score = self.best_moves.iter().map(|m| m.score).min().unwrap_or(0);
+				let score_range = (max_score - min_score) as f32;
+
+				for best_move in &self.best_moves {
+					let opacity = if score_range > 0.0 {
+						let normalized = (best_move.score - min_score) as f32 / score_range;
+						let opacity_range = (ARROW_MAX_OPACITY - ARROW_MIN_OPACITY) as f32;
+						ARROW_MIN_OPACITY + (normalized * opacity_range) as u8
+					} else {
+						ARROW_MAX_OPACITY
+					};
 
 					let arrow_color = (
 						opacity,
