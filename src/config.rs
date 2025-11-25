@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +44,13 @@ pub struct DebuggingConfig {
 pub static CONFIG: Lazy<Config> =
 	Lazy::new(|| Config::load().expect("Failed to load configuration"));
 
+pub static PROFILE: Lazy<&EngineProfile> = Lazy::new(|| {
+	CONFIG
+		.profiles
+		.get(&CONFIG.engine.profile)
+		.expect("Profile not found in config")
+});
+
 impl Config {
 	pub fn load() -> Result<Self> {
 		let settings = config::Config::builder()
@@ -52,12 +59,5 @@ impl Config {
 			.build()?;
 
 		settings.try_deserialize().map_err(Into::into)
-	}
-
-	pub fn active_profile(&self) -> Result<&EngineProfile> {
-		self.profiles.get(&self.engine.profile).context(format!(
-			"Profile '{}' not found in config",
-			self.engine.profile
-		))
 	}
 }
