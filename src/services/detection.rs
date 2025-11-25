@@ -1,4 +1,8 @@
 use std::{
+	sync::{
+		Arc,
+		atomic::{AtomicBool, Ordering},
+	},
 	thread::{self, JoinHandle},
 	time::{Duration, Instant},
 };
@@ -19,24 +23,34 @@ const BOARD_DETECTION_INTERVAL_FRAMES: usize = 30;
 
 pub struct DetectionService {
 	thread_handle: Option<JoinHandle<()>>,
+	shutdown: Arc<AtomicBool>,
 }
 
 impl DetectionService {
 	pub fn spawn(proxy: EventLoopProxy<UserEvent>, board_state: SharedBoardState) -> Self {
+		let shutdown = Arc::new(AtomicBool::new(false));
+		let shutdown_clone = Arc::clone(&shutdown);
+
 		let handle = thread::spawn(move || {
-			if let Err(e) = run_detection_loop(proxy, board_state) {
+			if let Err(e) = run_detection_loop(proxy, board_state, shutdown_clone) {
 				tracing::error!("Detection service error: {}", e);
 			}
 		});
 
 		Self {
 			thread_handle: Some(handle),
+			shutdown,
 		}
+	}
+
+	pub fn shutdown(&self) {
+		self.shutdown.store(true, Ordering::SeqCst);
 	}
 }
 
 impl Drop for DetectionService {
 	fn drop(&mut self) {
+		self.shutdown();
 		if let Some(handle) = self.thread_handle.take() {
 			let _ = handle.join();
 		}
@@ -45,6 +59,7 @@ impl Drop for DetectionService {
 
 fn run_detection_loop(
 	proxy: winit::event_loop::EventLoopProxy<UserEvent>, board_state: SharedBoardState,
+	shutdown: Arc<AtomicBool>,
 ) -> Result<()> {
 	let capture = ScreenCapture::new()?;
 
@@ -60,7 +75,7 @@ fn run_detection_loop(
 	let mut cached_board: Option<DetectedBoard> = None;
 	let mut frames_since_board_detection = BOARD_DETECTION_INTERVAL_FRAMES;
 
-	loop {
+	while !shutdown.load(Ordering::SeqCst) {
 		let loop_start = Instant::now();
 
 		let image = match capture.capture() {
@@ -143,7 +158,7 @@ fn run_detection_loop(
 		board.playing_as_white = detected_playing_as_white;
 
 		if !pieces.is_empty() && pieces.len() <= crate::vision::detector::MAX_PIECES {
-			let mut state_lock = board_state.lock().unwrap();
+			let mut state_lock = board_state.lock();
 			*state_lock = Some((board.clone(), pieces.clone()));
 		}
 
@@ -167,4 +182,7 @@ fn run_detection_loop(
 			));
 		}
 	}
+
+	tracing::debug!("Detection loop shutting down");
+	Ok(())
 }

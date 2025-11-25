@@ -1,4 +1,8 @@
 use std::{
+	sync::{
+		Arc,
+		atomic::{AtomicBool, Ordering},
+	},
 	thread::{self, JoinHandle},
 	time::Duration,
 };
@@ -15,24 +19,34 @@ const ENGINE_INIT_RETRY_DELAY_SECS: u64 = 5;
 
 pub struct AnalysisService {
 	thread_handle: Option<JoinHandle<()>>,
+	shutdown: Arc<AtomicBool>,
 }
 
 impl AnalysisService {
 	pub fn spawn(
 		proxy: winit::event_loop::EventLoopProxy<UserEvent>, board_state: SharedBoardState,
 	) -> Self {
+		let shutdown = Arc::new(AtomicBool::new(false));
+		let shutdown_clone = Arc::clone(&shutdown);
+
 		let handle = thread::spawn(move || {
-			run_analysis_loop(proxy, board_state);
+			run_analysis_loop(proxy, board_state, shutdown_clone);
 		});
 
 		Self {
 			thread_handle: Some(handle),
+			shutdown,
 		}
+	}
+
+	pub fn shutdown(&self) {
+		self.shutdown.store(true, Ordering::SeqCst);
 	}
 }
 
 impl Drop for AnalysisService {
 	fn drop(&mut self) {
+		self.shutdown();
 		if let Some(handle) = self.thread_handle.take() {
 			let _ = handle.join();
 		}
@@ -41,20 +55,25 @@ impl Drop for AnalysisService {
 
 fn run_analysis_loop(
 	proxy: winit::event_loop::EventLoopProxy<UserEvent>, board_state: SharedBoardState,
+	shutdown: Arc<AtomicBool>,
 ) {
 	let mut last_analyzed_fen: Option<String> = None;
 
-	loop {
+	while !shutdown.load(Ordering::SeqCst) {
 		let engine_result = EngineWrapper::new();
 
 		match engine_result {
 			Ok(mut engine) => {
 				tracing::info!("Analysis engine ready");
 
-				loop {
+				while !shutdown.load(Ordering::SeqCst) {
 					thread::sleep(Duration::from_secs(ANALYSIS_INTERVAL_SECS));
 
-					let current_position = board_state.lock().unwrap().clone();
+					if shutdown.load(Ordering::SeqCst) {
+						break;
+					}
+
+					let current_position = board_state.lock().clone();
 
 					if let Some((board, pieces)) = current_position {
 						let fen = board::to_fen(&board, &pieces);
@@ -104,8 +123,10 @@ fn run_analysis_loop(
 					}
 				}
 
-				tracing::warn!("Engine crashed, restarting...");
-				thread::sleep(Duration::from_secs(ENGINE_RESTART_DELAY_SECS));
+				if !shutdown.load(Ordering::SeqCst) {
+					tracing::warn!("Engine crashed, restarting...");
+					thread::sleep(Duration::from_secs(ENGINE_RESTART_DELAY_SECS));
+				}
 			}
 			Err(e) => {
 				tracing::error!(
@@ -117,4 +138,6 @@ fn run_analysis_loop(
 			}
 		}
 	}
+
+	tracing::debug!("Analysis loop shutting down");
 }
