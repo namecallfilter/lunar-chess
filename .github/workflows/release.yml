@@ -61,14 +61,14 @@ jobs:
         id: tag_version
         uses: mathieudutour/github-tag-action@v6.2
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.PAT }}
           custom_tag: ${{ needs.check-version.outputs.version }}
 
       - name: Build changelog
         id: build_changelog
         uses: mikepenz/release-changelog-builder-action@v5
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT }}
           toTag: ${{ steps.tag_version.outputs.new_tag }}
           configurationJson: |
             {
@@ -87,7 +87,7 @@ jobs:
         with:
           tag: ${{ steps.tag_version.outputs.new_tag }}
           name: Release ${{ steps.tag_version.outputs.new_tag }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT }}
           artifacts: target/release/lunar-chess.exe
           body: |
             ## What's Changed:
