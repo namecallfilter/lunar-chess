@@ -2,6 +2,14 @@
 
 A screen overlay that detects chessboards, recognizes pieces using ONNX, and displays best moves from a chess engine.
 
+## Supported Platforms
+
+| Platform | Status |
+|----------|--------|
+| Windows  | Supported |
+| macOS    | Coming soon |
+| Linux    | Coming soon |
+
 ## Setup
 
 1. Copy `config.example.toml` to `config.toml`
