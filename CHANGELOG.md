@@ -7,6 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/namecallfilter/lunar-chess/releases/tag/v0.2.0) - 2025-11-26
+
+### Added
+
+- add edge refinement for better board detection ([#8](https://github.com/namecallfilter/lunar-chess/pull/8))
+- lint and release workflows
+- supported platforms
+- graceful shutdown
+- config example
+- profiles
+- optimize vision
+- stockfish added
+
+### Fixed
+
+- release-plz ([#15](https://github.com/namecallfilter/lunar-chess/pull/15))
+- trigger release with file change ([#13](https://github.com/namecallfilter/lunar-chess/pull/13))
+- remove push run ([#3](https://github.com/namecallfilter/lunar-chess/pull/3))
+- use PAT
+- use PAT
+- opasity based on scoring not step
+- truncate multipv & PROFILE static
+- little more accurate
+- double buffer micro optimization
+- parking lot
+- loads label font once
+- parking lot
+- config
+- player orientation
+- chessboard in noisy area
+- made grid detection more accurate
+- board orientation
+
+### Other
+
+- add mit license and Cargo description ([#18](https://github.com/namecallfilter/lunar-chess/pull/18))
+- run the workflow on windows to fix the error ([#17](https://github.com/namecallfilter/lunar-chess/pull/17))
+- manual bump to v0.2.0 to trigger release ([#14](https://github.com/namecallfilter/lunar-chess/pull/14))
+- resolve publish conflict in release-plz config ([#11](https://github.com/namecallfilter/lunar-chess/pull/11))
+- fix release-plz toml syntax ([#10](https://github.com/namecallfilter/lunar-chess/pull/10))
+- force release-plz to track lunar-chess ([#9](https://github.com/namecallfilter/lunar-chess/pull/9))
+- finalize release workflow with draft support ([#7](https://github.com/namecallfilter/lunar-chess/pull/7))
+- release v0.1.0 ([#5](https://github.com/namecallfilter/lunar-chess/pull/5))
+- disable crates.io publishing ([#6](https://github.com/namecallfilter/lunar-chess/pull/6))
+- ci/update workflows ([#4](https://github.com/namecallfilter/lunar-chess/pull/4))
+- cleanup ([#2](https://github.com/namecallfilter/lunar-chess/pull/2))
+- apply type-driven design patterns
+- add strip
+- add readme
+- profile fn --> PROFILE static
+- fmt
+- Delete config.toml
+- Delete models directory
+- update
+- update .gitignore
+- refactor logging
+- file structure and screenshot
+- cba
+- *(vision)* rename
+- shouldnt be commitewd
+- *(board_detection)* Made it use an algorithm instead of an ML.
+- cleanup
+- cleanup
+- multipv with ruci and training folder
+- refactor
+- cleanup
+- init working
+- added fen
+- clean
+- cleanup
+- initial
+- temp
+- ON EVERYTHING IM GOING TO CRASHOUT
+- Merge branch 'main' of https://github.com/kaorlol/lunar-chess
+- cleanup
+- opencv added
+- ready for opencv in dynboard
+- Add TODO comments
+- first commit
+
 ## [0.1.0](https://github.com/namecallfilter/lunar-chess/releases/tag/v0.1.0) - 2025-11-26
 
 ### Other
