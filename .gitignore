@@ -1,5 +1,7 @@
 **/target
 
+pr.txt
+
 chessbots/
 models/
 config.toml
