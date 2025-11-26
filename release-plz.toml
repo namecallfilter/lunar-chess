@@ -1,7 +1,2 @@
 [workspace]
 git_release_draft = true
-
-[[package]]
-name = "lunar-chess"
-release = true
-publish = false
