@@ -47,23 +47,16 @@ fn main() -> Result<()> {
 	let init_start = std::time::Instant::now();
 
 	let capture = ScreenCapture::new()?;
-	let screen_width = capture.width();
-	let screen_height = capture.height();
+	let screen_size = capture.dimensions();
 
-	let (event_loop, mut app) = start_overlay(screen_width, screen_height)?;
+	let (event_loop, mut app) = start_overlay(screen_size)?;
 
 	tracing::info!("Initialized in {:?}", init_start.elapsed());
 
-	let board_state = Arc::new(Mutex::new(
-		Option::<(
-			model::detected::DetectedBoard,
-			Vec<model::detected::DetectedPiece>,
-		)>::None,
-	));
-	let board_state_for_analysis = Arc::clone(&board_state);
+	let board_state = Arc::new(Mutex::new(None));
 
 	let analysis_proxy = event_loop.create_proxy();
-	let _analysis_service = AnalysisService::spawn(analysis_proxy, board_state_for_analysis);
+	let _analysis_service = AnalysisService::spawn(analysis_proxy, board_state.clone());
 
 	let detection_proxy = event_loop.create_proxy();
 	let _detection_service = DetectionService::spawn(detection_proxy, board_state);

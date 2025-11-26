@@ -10,11 +10,11 @@ use ort::{
 
 use crate::{
 	config::CONFIG,
-	model::detected::{DetectedBoard, DetectedPiece},
+	model::detected::{DetectedBoard, DetectedPiece, Rect},
 	vision::{board_detection::detect_board_scanline, postprocess},
 };
 
-const YOLO_TARGET_SIZE: u32 = 640;
+pub const YOLO_INPUT_SIZE: u32 = 640;
 
 pub const MAX_PIECES: usize = 32;
 
@@ -28,8 +28,8 @@ impl ImageBuffers {
 			tensor_array: Array4::<f32>::zeros((
 				1,
 				3,
-				YOLO_TARGET_SIZE as usize,
-				YOLO_TARGET_SIZE as usize,
+				YOLO_INPUT_SIZE as usize,
+				YOLO_INPUT_SIZE as usize,
 			)),
 		}
 	}
@@ -66,23 +66,23 @@ impl ChessDetector {
 	pub fn detect_pieces(
 		&mut self, image: &RgbaImage, board: &DetectedBoard,
 	) -> Result<Vec<DetectedPiece>> {
-		if board.x < 0.0 || board.y < 0.0 || board.width <= 0.0 || board.height <= 0.0 {
+		if board.x() < 0.0 || board.y() < 0.0 || board.rect.is_empty() {
 			tracing::debug!(
 				"Invalid board bounds: x={}, y={}, w={}, h={}",
-				board.x,
-				board.y,
-				board.width,
-				board.height
+				board.x(),
+				board.y(),
+				board.width(),
+				board.height()
 			);
 			return Ok(Vec::new());
 		}
 
 		let board_cropped = image::imageops::crop_imm(
 			image,
-			board.x as u32,
-			board.y as u32,
-			board.width as u32,
-			board.height as u32,
+			board.x() as u32,
+			board.y() as u32,
+			board.width() as u32,
+			board.height() as u32,
 		);
 
 		let board_cropped_img = board_cropped.to_image();
@@ -91,11 +91,11 @@ impl ChessDetector {
 		let src_image =
 			Image::from_slice_u8(width, height, raw_buf.as_mut_slice(), PixelType::U8x4)?;
 
-		let mut dst_image = Image::new(YOLO_TARGET_SIZE, YOLO_TARGET_SIZE, PixelType::U8x4);
+		let mut dst_image = Image::new(YOLO_INPUT_SIZE, YOLO_INPUT_SIZE, PixelType::U8x4);
 		self.resizer.resize(&src_image, &mut dst_image, None)?;
 
 		let warped_board =
-			RgbaImage::from_raw(YOLO_TARGET_SIZE, YOLO_TARGET_SIZE, dst_image.into_vec())
+			RgbaImage::from_raw(YOLO_INPUT_SIZE, YOLO_INPUT_SIZE, dst_image.into_vec())
 				.context("Failed to create warped board image")?;
 
 		image_to_tensor_inplace(&warped_board, &mut self.buffers.tensor_array);
@@ -109,22 +109,27 @@ impl ChessDetector {
 		let piece_predictions_view = piece_predictions.view();
 		let detected_pieces_warped = postprocess::from_yolo_output(
 			&piece_predictions_view,
-			YOLO_TARGET_SIZE,
-			YOLO_TARGET_SIZE,
+			YOLO_INPUT_SIZE,
+			YOLO_INPUT_SIZE,
 			CONFIG.detection.piece_confidence_threshold,
 		);
 
-		let scale_x = board.width / YOLO_TARGET_SIZE as f32;
-		let scale_y = board.height / YOLO_TARGET_SIZE as f32;
+		let scale_x = board.width() / YOLO_INPUT_SIZE as f32;
+		let scale_y = board.height() / YOLO_INPUT_SIZE as f32;
 
 		let detected_pieces: Vec<DetectedPiece> = detected_pieces_warped
 			.into_iter()
-			.map(|mut piece| {
-				piece.x = board.x + (piece.x * scale_x);
-				piece.y = board.y + (piece.y * scale_y);
-				piece.width *= scale_x;
-				piece.height *= scale_y;
-				piece
+			.map(|piece| {
+				DetectedPiece::new(
+					Rect::new(
+						board.x() + (piece.x() * scale_x),
+						board.y() + (piece.y() * scale_y),
+						piece.width() * scale_x,
+						piece.height() * scale_y,
+					),
+					piece.piece_type,
+					piece.confidence,
+				)
 			})
 			.collect();
 

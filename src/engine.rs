@@ -7,18 +7,43 @@ use std::{
 use anyhow::Result;
 
 use crate::{
+	chess::Score,
 	config::{CONFIG, PROFILE},
 	errors::AnalysisError,
 };
 
-const MATE_SCORE_BASE: i32 = 10000;
-
 // TODO: Support mac and linux engine
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MoveNotation(String);
+
+impl MoveNotation {
+	pub fn new(notation: impl Into<String>) -> Self {
+		Self(notation.into())
+	}
+
+	#[inline]
+	pub fn as_str(&self) -> &str {
+		&self.0
+	}
+}
+
+impl std::fmt::Display for MoveNotation {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "{}", self.0)
+	}
+}
+
+impl AsRef<str> for MoveNotation {
+	fn as_ref(&self) -> &str {
+		&self.0
+	}
+}
 
 #[derive(Debug, Clone)]
 pub struct MoveWithScore {
-	pub move_str: String,
-	pub score: i32,
+	pub notation: MoveNotation,
+	pub score: Score,
 }
 
 pub struct EngineWrapper {
@@ -103,25 +128,18 @@ impl EngineWrapper {
 				};
 
 				let score = match score_with_bound.kind {
-					ruci::Score::Centipawns(cp) => cp as i32,
-					ruci::Score::MateIn(moves) => {
-						let sign = if moves > 0 { 1 } else { -1 };
-						sign * (MATE_SCORE_BASE - moves.abs() as i32)
-					}
+					ruci::Score::Centipawns(cp) => Score::centipawns(cp as i32),
+					ruci::Score::MateIn(moves) => Score::mate_in(moves as i8),
 				};
 
-				match best_moves
-					.iter_mut()
-					.find(|m| m.move_str == first_move.to_string())
-				{
+				let notation = MoveNotation::new(first_move.to_string());
+
+				match best_moves.iter_mut().find(|m| m.notation == notation) {
 					Some(existing) if score > existing.score => {
 						existing.score = score;
 					}
 					None => {
-						best_moves.push(MoveWithScore {
-							move_str: first_move.to_string(),
-							score,
-						});
+						best_moves.push(MoveWithScore { notation, score });
 					}
 					_ => {}
 				}

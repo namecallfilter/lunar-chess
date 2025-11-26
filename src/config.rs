@@ -4,6 +4,8 @@ use anyhow::Result;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
+use crate::model::Confidence;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
 	pub engine: EngineConfig,
@@ -15,7 +17,7 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DetectionConfig {
 	pub path: String,
-	pub piece_confidence_threshold: f32,
+	pub piece_confidence_threshold: Confidence,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

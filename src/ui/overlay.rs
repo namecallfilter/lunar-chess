@@ -15,36 +15,26 @@ use winit::{
 };
 
 use crate::{
+	chess::ChessMove,
 	config::CONFIG,
 	model::detected::{DetectedBoard, DetectedPiece},
-	ui::draw_board::{draw_board_outline, draw_chess_grid, draw_move_arrow, draw_piece_labels},
+	ui::{
+		Color, ScreenDimensions,
+		draw_board::{draw_board_outline, draw_chess_grid, draw_move_arrow, draw_piece_labels},
+	},
 };
 
-const DEFAULT_SCREEN_WIDTH: u32 = 1920;
-const DEFAULT_SCREEN_HEIGHT: u32 = 1080;
-
-const UI_REDRAW_INTERVAL_MS: u64 = 100;
+const UI_REDRAW_INTERVAL: Duration = Duration::from_millis(100);
 
 const ARROW_MIN_OPACITY: u8 = 40;
 const ARROW_MAX_OPACITY: u8 = 215;
 
-const COLOR_ARROW_BASE: (u8, u8, u8) = (100, 150, 255); // Blue
+const COLOR_ARROW_BASE: Color = Color::rgb(100, 150, 255); // Blue
 
 #[derive(Debug, Clone)]
 pub enum UserEvent {
-	UpdateDetections(Option<BoardBounds>, Vec<DetectedPiece>),
-	UpdateBestMoves(Vec<BestMove>),
-	#[allow(dead_code)]
-	Tick,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct BestMove {
-	pub from_file: u8,
-	pub from_rank: u8,
-	pub to_file: u8,
-	pub to_rank: u8,
-	pub score: i32,
+	UpdateDetections(Option<DetectedBoard>, Vec<DetectedPiece>),
+	UpdateBestMoves(Vec<ChessMove>),
 }
 
 pub struct OverlayWindow {
@@ -52,22 +42,12 @@ pub struct OverlayWindow {
 	surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
 	context: Option<softbuffer::Context<Rc<Window>>>,
 	draw_target: Option<DrawTarget>,
-	board_bounds: Option<BoardBounds>,
+	board: Option<DetectedBoard>,
 	pieces: Vec<DetectedPiece>,
-	best_moves: Vec<BestMove>,
-	screen_width: u32,
-	screen_height: u32,
+	best_moves: Vec<ChessMove>,
+	screen_size: ScreenDimensions,
 	should_redraw: bool,
 	last_tick: Instant,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct BoardBounds {
-	pub x: f32,
-	pub y: f32,
-	pub width: f32,
-	pub height: f32,
-	pub playing_as_white: bool,
 }
 
 impl OverlayWindow {
@@ -77,39 +57,37 @@ impl OverlayWindow {
 			surface: None,
 			context: None,
 			draw_target: None,
-			board_bounds: None,
+			board: None,
 			pieces: Vec::new(),
 			best_moves: Vec::new(),
-			screen_width: DEFAULT_SCREEN_WIDTH,
-			screen_height: DEFAULT_SCREEN_HEIGHT,
+			screen_size: ScreenDimensions::default(),
 			should_redraw: false,
 			last_tick: Instant::now(),
 		}
 	}
 
-	pub fn update_detections(&mut self, bounds: Option<BoardBounds>, pieces: Vec<DetectedPiece>) {
-		self.board_bounds = bounds;
+	pub fn update_detections(&mut self, board: Option<DetectedBoard>, pieces: Vec<DetectedPiece>) {
+		self.board = board;
 		self.pieces = pieces;
 		self.should_redraw = true;
 	}
 
-	pub fn update_best_moves(&mut self, best_moves: Vec<BestMove>) {
+	pub fn update_best_moves(&mut self, best_moves: Vec<ChessMove>) {
 		self.best_moves = best_moves;
 		self.should_redraw = true;
 	}
 
-	pub fn set_screen_size(&mut self, width: u32, height: u32) {
-		self.screen_width = width;
-		self.screen_height = height;
+	pub fn set_screen_size(&mut self, screen_size: ScreenDimensions) {
+		self.screen_size = screen_size;
 	}
 
 	fn draw(&mut self) {
-		if let (Some(dt), Some(bounds)) = (&mut self.draw_target, self.board_bounds) {
+		if let (Some(dt), Some(board)) = (&mut self.draw_target, self.board) {
 			dt.clear(SolidSource::from_unpremultiplied_argb(0, 0, 0, 0));
 
 			if CONFIG.debugging.show_grid {
-				draw_board_outline(dt, bounds.x, bounds.y, bounds.width, bounds.height);
-				draw_chess_grid(dt, bounds.x, bounds.y, bounds.width, bounds.height);
+				draw_board_outline(dt, &board.rect);
+				draw_chess_grid(dt, &board.rect);
 			}
 
 			if CONFIG.debugging.show_piece_labels {
@@ -117,41 +95,33 @@ impl OverlayWindow {
 			}
 
 			if !self.best_moves.is_empty() {
-				let max_score = self.best_moves.iter().map(|m| m.score).max().unwrap_or(0);
-				let min_score = self.best_moves.iter().map(|m| m.score).min().unwrap_or(0);
+				let max_score = self
+					.best_moves
+					.iter()
+					.map(|m| m.score.to_numeric())
+					.max()
+					.unwrap_or(0);
+				let min_score = self
+					.best_moves
+					.iter()
+					.map(|m| m.score.to_numeric())
+					.min()
+					.unwrap_or(0);
 				let score_range = (max_score - min_score) as f32;
 
 				for best_move in &self.best_moves {
 					let opacity = if score_range > 0.0 {
-						let normalized = (best_move.score - min_score) as f32 / score_range;
+						let normalized =
+							(best_move.score.to_numeric() - min_score) as f32 / score_range;
 						let opacity_range = (ARROW_MAX_OPACITY - ARROW_MIN_OPACITY) as f32;
 						ARROW_MIN_OPACITY + (normalized * opacity_range) as u8
 					} else {
 						ARROW_MAX_OPACITY
 					};
 
-					let arrow_color = (
-						opacity,
-						COLOR_ARROW_BASE.0,
-						COLOR_ARROW_BASE.1,
-						COLOR_ARROW_BASE.2,
-					);
+					let arrow_color = COLOR_ARROW_BASE.with_alpha(opacity);
 
-					draw_move_arrow(
-						dt,
-						&DetectedBoard {
-							x: bounds.x,
-							y: bounds.y,
-							width: bounds.width,
-							height: bounds.height,
-							playing_as_white: bounds.playing_as_white,
-						},
-						best_move.from_file,
-						best_move.from_rank,
-						best_move.to_file,
-						best_move.to_rank,
-						arrow_color,
-					);
+					draw_move_arrow(dt, &board, best_move, arrow_color);
 				}
 			}
 		}
@@ -185,25 +155,27 @@ impl OverlayWindow {
 impl ApplicationHandler<UserEvent> for OverlayWindow {
 	fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
 		match event {
-			UserEvent::UpdateDetections(bounds, pieces) => {
-				self.update_detections(bounds, pieces);
+			UserEvent::UpdateDetections(board, pieces) => {
+				self.update_detections(board, pieces);
+
 				if let Some(window) = &self.window {
 					window.request_redraw();
 				}
 			}
 			UserEvent::UpdateBestMoves(best_moves) => {
 				self.update_best_moves(best_moves);
+
 				if let Some(window) = &self.window {
 					window.request_redraw();
 				}
 			}
-			UserEvent::Tick => {}
 		}
 	}
 
 	fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-		if self.last_tick.elapsed() >= Duration::from_millis(UI_REDRAW_INTERVAL_MS) {
+		if self.last_tick.elapsed() >= UI_REDRAW_INTERVAL {
 			self.last_tick = Instant::now();
+
 			if let Some(window) = &self.window {
 				window.request_redraw();
 			}
@@ -217,7 +189,10 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 				.with_transparent(true)
 				.with_decorations(false)
 				.with_visible(true)
-				.with_inner_size(PhysicalSize::new(self.screen_width, self.screen_height))
+				.with_inner_size(PhysicalSize::new(
+					self.screen_size.width,
+					self.screen_size.height,
+				))
 				.with_window_level(WindowLevel::AlwaysOnTop)
 				.with_position(PhysicalPosition::new(0, 0));
 
@@ -275,8 +250,8 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 			};
 
 			if let (Some(width), Some(height)) = (
-				NonZeroU32::new(self.screen_width),
-				NonZeroU32::new(self.screen_height),
+				NonZeroU32::new(self.screen_size.width),
+				NonZeroU32::new(self.screen_size.height),
 			) {
 				if let Err(e) = surface.resize(width, height) {
 					tracing::warn!("Failed to resize surface: {}", e);
@@ -285,15 +260,15 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 			} else {
 				tracing::warn!(
 					"Invalid screen dimensions: {}x{}",
-					self.screen_width,
-					self.screen_height
+					self.screen_size.width,
+					self.screen_size.height
 				);
 				return;
 			}
 
 			self.draw_target = Some(DrawTarget::new(
-				self.screen_width as i32,
-				self.screen_height as i32,
+				self.screen_size.width as i32,
+				self.screen_size.height as i32,
 			));
 
 			self.surface = Some(surface);
@@ -338,12 +313,12 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 }
 
 pub fn start_overlay(
-	screen_width: u32, screen_height: u32,
+	screen_size: ScreenDimensions,
 ) -> Result<(EventLoop<UserEvent>, OverlayWindow)> {
 	let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
 
 	let mut app = OverlayWindow::new();
-	app.set_screen_size(screen_width, screen_height);
+	app.set_screen_size(screen_size);
 
 	Ok((event_loop, app))
 }
