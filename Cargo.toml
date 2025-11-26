@@ -1,6 +1,6 @@
 [package]
 name = "lunar-chess"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 publish = false
 
@@ -36,4 +36,3 @@ strip = true
 lto = true
 codegen-units = 1
 panic = "abort"
-
