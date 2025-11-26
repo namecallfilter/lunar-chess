@@ -2,7 +2,7 @@ name: Upload Binary
 
 on:
   release:
-    types: [published]
+    types: [created]
 
 permissions:
   contents: write
@@ -26,3 +26,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: target/release/lunar-chess.exe
+
+      - name: Publish Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ github.event.release.tag_name }}" --draft=false
