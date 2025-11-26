@@ -16,22 +16,43 @@ jobs:
     permissions:
       contents: write
     steps:
-      - &checkout
-        name: Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
-      - &install-rust
-        name: Install Rust toolchain
+
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-plz-workflow"
+
       - name: Run release-plz
+        id: release-plz
         uses: release-plz/action@v0.5
         with:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Build Release Binary
+        if: steps.release-plz.outputs.releases_created == 'true'
+        run: cargo build --release
+
+      - name: Upload Release Asset
+        if: steps.release-plz.outputs.releases_created == 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo '${{ steps.release-plz.outputs.releases }}' | jq -r '.[].tag' | while read tag; do
+            echo "Uploading binary for tag: $tag"
+            gh release upload "$tag" "target/release/lunar-chess.exe"
+          done
 
   release-plz-pr:
     name: Release-plz PR
@@ -43,8 +64,20 @@ jobs:
       group: release-plz-${{ github.ref }}
       cancel-in-progress: false
     steps:
-      - *checkout
-      - *install-rust
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-plz-workflow"
+
       - name: Run release-plz
         uses: release-plz/action@v0.5
         with:
