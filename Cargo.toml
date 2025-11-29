@@ -1,6 +1,6 @@
 [package]
 name = "lunar-chess"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 description = "A screen overlay that detects chessboards, recognizes pieces using ONNX, and displays best moves from a chess engine."
 license = "MIT"
