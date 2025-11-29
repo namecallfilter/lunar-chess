@@ -21,6 +21,7 @@ use ui::start_overlay;
 
 // TODO: Auto play
 // TODO: Detect whose turn it is (autoplay only feature?)
+// TODO: Premove forced mate
 
 fn main() -> Result<()> {
 	tracing_subscriber::registry()
