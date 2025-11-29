@@ -10,6 +10,7 @@ use std::{
 use crate::{
 	chess::{ChessMove, board},
 	engine::EngineWrapper,
+	errors::Fen,
 	ui::{SharedBoardState, UserEvent},
 };
 
@@ -57,7 +58,7 @@ fn run_analysis_loop(
 	proxy: winit::event_loop::EventLoopProxy<UserEvent>, board_state: SharedBoardState,
 	shutdown: Arc<AtomicBool>,
 ) {
-	let mut last_analyzed_fen: Option<String> = None;
+	let mut last_analyzed_fen: Option<Fen> = None;
 
 	while !shutdown.load(Ordering::SeqCst) {
 		let engine_result = EngineWrapper::new();
@@ -76,11 +77,25 @@ fn run_analysis_loop(
 					let current_position = board_state.lock().clone();
 
 					if let Some(state) = current_position {
-						let fen = state.to_fen();
+						let fen = match state.to_fen() {
+							Ok(f) => f,
+							Err(e) => {
+								tracing::debug!("Cannot generate FEN: {}", e);
+								continue;
+							}
+						};
 
 						if last_analyzed_fen.as_ref() == Some(&fen) {
 							continue;
 						}
+
+						let player_color = match state.board.player_color() {
+							Some(c) => c,
+							None => {
+								tracing::debug!("Board orientation unknown, skipping analysis");
+								continue;
+							}
+						};
 
 						match engine.set_position(&fen) {
 							Ok(_) => {}
@@ -97,13 +112,10 @@ fn run_analysis_loop(
 									let best_moves: Vec<ChessMove> = moves_with_scores
 										.iter()
 										.filter_map(|m| {
-											board::parse_move(
-												m.notation.as_str(),
-												state.board.player_color,
-											)
-											.map(|mv| {
-												ChessMove::with_score(mv.from, mv.to, m.score)
-											})
+											board::parse_move(m.notation.as_str(), player_color)
+												.map(|mv| {
+													ChessMove::with_score(mv.from, mv.to, m.score)
+												})
 										})
 										.collect();
 

@@ -1,16 +1,19 @@
 use super::Confidence;
 use crate::{
 	chess::{BOARD_SIZE, PieceType, PlayerColor, Square},
+	errors::{BoardToFenError, Fen},
 	ui::{CellSize, Point2D},
 };
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct Rect {
 	x: f32,
 	y: f32,
 	width: f32,
 	height: f32,
 }
+
+const EPSILON: f32 = 1e-6;
 
 impl Rect {
 	pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
@@ -49,22 +52,43 @@ impl Rect {
 
 	#[inline]
 	pub fn is_empty(&self) -> bool {
-		self.width == 0.0 || self.height == 0.0
+		self.width <= EPSILON || self.height <= EPSILON
+	}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoardOrientation {
+	Unknown,
+	WhiteAtBottom,
+	WhiteAtTop,
+}
+
+impl BoardOrientation {
+	pub fn to_player_color(self) -> Option<PlayerColor> {
+		match self {
+			BoardOrientation::Unknown => None,
+			BoardOrientation::WhiteAtBottom => Some(PlayerColor::White),
+			BoardOrientation::WhiteAtTop => Some(PlayerColor::Black),
+		}
 	}
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct DetectedBoard {
 	pub rect: Rect,
-	pub player_color: PlayerColor,
+	pub orientation: BoardOrientation,
 }
 
 impl DetectedBoard {
 	pub fn new(rect: Rect) -> Self {
 		Self {
 			rect,
-			player_color: PlayerColor::White,
+			orientation: BoardOrientation::Unknown,
 		}
+	}
+
+	pub fn player_color(&self) -> Option<PlayerColor> {
+		self.orientation.to_player_color()
 	}
 
 	#[inline]
@@ -163,7 +187,7 @@ impl BoardState {
 		Self { board, pieces }
 	}
 
-	pub fn detect_orientation(&self) -> PlayerColor {
+	pub fn detect_orientation(&self) -> BoardOrientation {
 		let mut white_bottom = 0;
 		let mut white_top = 0;
 
@@ -182,13 +206,19 @@ impl BoardState {
 		}
 
 		if white_bottom > white_top {
-			PlayerColor::White
+			BoardOrientation::WhiteAtBottom
 		} else {
-			PlayerColor::Black
+			BoardOrientation::WhiteAtTop
 		}
 	}
 
-	pub fn to_fen(&self) -> String {
+	pub fn to_fen(&self) -> Result<Fen, BoardToFenError> {
+		let player_color = self
+			.board
+			.orientation
+			.to_player_color()
+			.ok_or(BoardToFenError::UnknownOrientation)?;
+
 		let mut chess_board: [[Option<PieceType>; BOARD_SIZE]; BOARD_SIZE] =
 			[[None; BOARD_SIZE]; BOARD_SIZE];
 
@@ -205,12 +235,28 @@ impl BoardState {
 			}
 		}
 
-		if self.board.player_color.is_black() {
+		if player_color.is_black() {
 			chess_board.reverse();
 
 			for row in chess_board.iter_mut() {
 				row.reverse();
 			}
+		}
+
+		let has_white_king = chess_board
+			.iter()
+			.flatten()
+			.any(|p| matches!(p, Some(PieceType::WhiteKing)));
+		let has_black_king = chess_board
+			.iter()
+			.flatten()
+			.any(|p| matches!(p, Some(PieceType::BlackKing)));
+
+		if !has_white_king {
+			return Err(BoardToFenError::MissingKing { color: "white" });
+		}
+		if !has_black_king {
+			return Err(BoardToFenError::MissingKing { color: "black" });
 		}
 
 		let mut fen = String::new();
@@ -245,10 +291,45 @@ impl BoardState {
 		}
 
 		fen.push(' ');
-		fen.push(self.board.player_color.to_fen_char());
-		fen.push_str(" - - 0 1");
+		fen.push(player_color.to_fen_char());
+		fen.push(' ');
 
-		fen
+		let castling = Self::infer_castling_rights(&chess_board);
+		if castling.is_empty() {
+			fen.push('-');
+		} else {
+			fen.push_str(&castling);
+		}
+
+		fen.push_str(" - 0 1");
+
+		Ok(Fen::from_validated(fen))
+	}
+
+	fn infer_castling_rights(board: &[[Option<PieceType>; BOARD_SIZE]; BOARD_SIZE]) -> String {
+		let mut castling = String::new();
+
+		if matches!(board[7][4], Some(PieceType::WhiteKing)) {
+			if matches!(board[7][7], Some(PieceType::WhiteRook)) {
+				castling.push('K');
+			}
+
+			if matches!(board[7][0], Some(PieceType::WhiteRook)) {
+				castling.push('Q');
+			}
+		}
+
+		if matches!(board[0][4], Some(PieceType::BlackKing)) {
+			if matches!(board[0][7], Some(PieceType::BlackRook)) {
+				castling.push('k');
+			}
+
+			if matches!(board[0][0], Some(PieceType::BlackRook)) {
+				castling.push('q');
+			}
+		}
+
+		castling
 	}
 
 	pub fn piece_to_square(&self, piece: &DetectedPiece) -> Option<Square> {
