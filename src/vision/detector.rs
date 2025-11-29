@@ -11,7 +11,7 @@ use ort::{
 use crate::{
 	config::CONFIG,
 	model::detected::{DetectedBoard, DetectedPiece, Rect},
-	vision::{board_detection::detect_board_scanline, postprocess},
+	vision::{board_detection::detect_board_hough, postprocess},
 };
 
 pub const YOLO_INPUT_SIZE: u32 = 640;
@@ -60,7 +60,7 @@ impl ChessDetector {
 	}
 
 	pub fn detect_board(&self, image: &RgbaImage) -> Result<Option<DetectedBoard>> {
-		Ok(detect_board_scanline(&grayscale::<RgbaImage>(image)))
+		Ok(detect_board_hough(&grayscale::<RgbaImage>(image)))
 	}
 
 	pub fn detect_pieces(
