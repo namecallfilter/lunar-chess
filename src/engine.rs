@@ -133,15 +133,16 @@ impl EngineWrapper {
 
 	pub fn get_best_moves(&mut self) -> Result<Vec<MoveWithScore>> {
 		if let (Some(book), Some(fen)) = (self.book.as_ref(), self.current_position.as_ref())
-			&& let Some(entry) = book.get_best_move_from_fen(fen.as_str()) {
-				let move_str = entry.move_string;
-				tracing::info!("Opening Book Hit: {} (Weight: {})", move_str, entry.weight);
+			&& let Some(entry) = book.get_best_move_from_fen(fen.as_str())
+		{
+			let move_str = entry.move_string;
+			tracing::info!("Opening Book Hit: {} (Weight: {})", move_str, entry.weight);
 
-				return Ok(vec![MoveWithScore {
-					notation: MoveNotation::new(move_str),
-					score: Score::centipawns(0),
-				}]);
-			}
+			return Ok(vec![MoveWithScore {
+				notation: MoveNotation::new(move_str),
+				score: Score::centipawns(0),
+			}]);
+		}
 
 		let mut best_moves: Vec<MoveWithScore> = Vec::new();
 
