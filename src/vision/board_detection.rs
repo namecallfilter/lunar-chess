@@ -1,680 +1,767 @@
+use std::{cmp::Ordering, f64::consts::PI};
+
 use image::GrayImage;
 
-use crate::{
-	chess::BOARD_SIZE,
-	model::detected::{DetectedBoard, Rect},
-};
+use crate::model::detected::{DetectedBoard, Rect};
 
-#[derive(Debug, Copy, Clone)]
-struct BoardDetectionParams {
-	min_square_size: usize,
-	min_runs: usize,
-	variance_tolerance: f32,
-	expansion_tolerance: f32,
-	board_ratio_tolerance: f32,
-	min_board_screen_ratio: f32,
-	min_grid_confidence: f32,
-	square_aspect_min: f32,
-	square_aspect_max: f32,
-}
+const EPSILON: f32 = 1e-6;
 
-impl BoardDetectionParams {
-	const DEFAULT: Self = Self {
-		min_square_size: 4,
-		min_runs: 5,
-		variance_tolerance: 0.30,
-		expansion_tolerance: 0.25,
-		board_ratio_tolerance: 0.12,
-		min_board_screen_ratio: 0.10,
-		min_grid_confidence: 0.75,
-		square_aspect_min: 0.85,
-		square_aspect_max: 1.15,
-	};
-}
+const SOBEL_GX: [[i16; 3]; 3] = [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]];
+const SOBEL_GY: [[i16; 3]; 3] = [[-1, -2, -1], [0, 0, 0], [1, 2, 1]];
 
-static PARAMS: BoardDetectionParams = BoardDetectionParams::DEFAULT;
+const EDGE_THRESHOLD: u16 = 100;
+const THETA_BINS: usize = 180;
+const NMS_WINDOW_RHO: usize = 10;
+const NMS_WINDOW_THETA: usize = 5;
+const SEGMENT_GAP_TOLERANCE: usize = 5;
+const MIN_SEGMENT_FRACTION: f32 = 0.1;
+const VERTICAL_THETA_TOLERANCE: usize = 10;
+const HORIZONTAL_THETA_TOLERANCE: usize = 10;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PixelIdx(usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PixelCount(usize);
 
 #[derive(Debug, Clone, Copy)]
-struct Run {
-	len: usize,
-	x_pos: usize,
+struct PixelF(f32);
+
+#[derive(Debug, Clone, Copy)]
+struct VoteCount(u32);
+
+#[derive(Debug, Clone, Copy)]
+struct Rho(f32);
+
+#[derive(Debug, Clone, Copy)]
+struct ThetaDeg(usize);
+
+#[derive(Debug, Clone, Copy)]
+struct GridSpacing(f32);
+
+#[derive(Debug, Clone, Copy)]
+struct GridPosition(f32);
+
+#[derive(Debug, Clone, Copy)]
+struct PixelPoint {
+	x: PixelF,
+	y: PixelF,
 }
 
-struct VerticalScanResult {
-	max_height: f32,
-	y_start: f32,
-}
-
-struct HorizontalPattern {
-	start_x: usize,
-	end_x: usize,
-	avg_square_width: f32,
-	square_count: usize,
-}
-
-struct BoardCandidate {
-	board: DetectedBoard,
-	score: f32,
-}
-
-struct PatternSpan {
-	start_x: usize,
-	end_x: usize,
-	avg_width: f32,
-	count: usize,
-}
-
-#[derive(Debug, Copy, Clone)]
-enum Axis {
-	Horizontal,
-	Vertical,
-}
-
-#[derive(Debug, Copy, Clone)]
-struct ImageView<'a> {
-	raw: &'a [u8],
-	width: usize,
-	height: usize,
-}
-
-impl<'a> ImageView<'a> {
-	fn from_gray_image(image: &'a GrayImage) -> Self {
+impl PixelPoint {
+	fn new(x: f32, y: f32) -> Self {
 		Self {
-			raw: image.as_raw(),
-			width: image.width() as usize,
-			height: image.height() as usize,
+			x: PixelF(x),
+			y: PixelF(y),
+		}
+	}
+}
+
+struct EdgeMap {
+	data: Vec<bool>,
+	width: PixelCount,
+	height: PixelCount,
+}
+
+impl EdgeMap {
+	fn new(width: usize, height: usize) -> Self {
+		Self {
+			data: vec![false; width * height],
+			width: PixelCount(width),
+			height: PixelCount(height),
 		}
 	}
 
-	fn pixel_at(&self, x: usize, y: usize) -> u8 {
-		self.raw[y * self.width + x]
-	}
-
-	fn column_pixel(&self, x: usize, y: usize) -> u8 {
-		self.raw[y * self.width + x]
-	}
-}
-
-struct EdgeSearchParams {
-	start_x: f32,
-	start_y: f32,
-	perpendicular_length: f32,
-	axis: Axis,
-	search_distance: f32,
-}
-
-pub fn detect_board_scanline(image: &GrayImage) -> Option<DetectedBoard> {
-	let img = ImageView::from_gray_image(image);
-	let step = 8.max(img.height / 100);
-
-	let mut best_candidate: Option<BoardCandidate> = None;
-
-	for y in (0..img.height).step_by(step) {
-		if let Some(candidate) = process_scanline(&img, y)
-			&& best_candidate
-				.as_ref()
-				.is_none_or(|b| candidate.score > b.score)
-		{
-			best_candidate = Some(candidate);
+	#[inline]
+	fn set_edge(&mut self, x: PixelIdx, y: PixelIdx) {
+		if x.0 < self.width.0 && y.0 < self.height.0 {
+			self.data[y.0 * self.width.0 + x.0] = true;
 		}
 	}
 
-	best_candidate.map(|c| c.board)
-}
-
-fn process_scanline(img: &ImageView, y: usize) -> Option<BoardCandidate> {
-	let row_start = y * img.width;
-	let row_pixels = &img.raw[row_start..row_start + img.width];
-	let h_runs = get_run_lengths_with_pos(row_pixels)?;
-
-	let pattern = find_horizontal_pattern(&h_runs)?;
-
-	let total_width = pattern.end_x - pattern.start_x;
-	if (total_width as f32) < (img.width as f32 * PARAMS.min_board_screen_ratio) {
-		return None;
+	#[inline]
+	fn is_edge(&self, x: PixelIdx, y: PixelIdx) -> bool {
+		if x.0 < self.width.0 && y.0 < self.height.0 {
+			self.data[y.0 * self.width.0 + x.0]
+		} else {
+			false
+		}
 	}
 
-	let vertical = scan_vertical_columns(img, &pattern)?;
-
-	let board_ratio = (total_width as f32) / vertical.max_height;
-	if (1.0 - board_ratio).abs() >= PARAMS.board_ratio_tolerance {
-		return None;
+	fn width(&self) -> usize {
+		self.width.0
 	}
 
-	let grid_confidence = verify_grid_pattern(
-		img,
-		pattern.start_x as f32,
-		vertical.y_start,
-		total_width as f32,
-		vertical.max_height,
-	);
-
-	if grid_confidence < PARAMS.min_grid_confidence {
-		return None;
+	fn height(&self) -> usize {
+		self.height.0
 	}
-
-	let score = calculate_board_score(
-		total_width as f32,
-		board_ratio,
-		grid_confidence,
-		pattern.square_count,
-	);
-
-	let initial_rect = Rect::new(
-		pattern.start_x as f32,
-		vertical.y_start,
-		total_width as f32,
-		vertical.max_height,
-	);
-
-	let refined_rect = refine_board_corners(img, initial_rect);
-
-	Some(BoardCandidate {
-		board: DetectedBoard::new(refined_rect),
-		score,
-	})
 }
 
-fn find_horizontal_pattern(runs: &[Run]) -> Option<HorizontalPattern> {
-	let span = find_and_expand_pattern(runs)?;
-	Some(HorizontalPattern {
-		start_x: span.start_x,
-		end_x: span.end_x,
-		avg_square_width: span.avg_width,
-		square_count: span.count,
-	})
+#[derive(Debug, Clone, Copy)]
+struct HoughLine {
+	rho: Rho,
+	theta: ThetaDeg,
+	votes: VoteCount,
 }
 
-fn scan_vertical_columns(
-	img: &ImageView, pattern: &HorizontalPattern,
-) -> Option<VerticalScanResult> {
-	let total_width = pattern.end_x - pattern.start_x;
-	let scan_percentages = [0.15, 0.25, 0.35, 0.50, 0.65, 0.75, 0.85];
+#[derive(Debug, Clone, Copy)]
+struct MeasuredSegment {
+	start: PixelPoint,
+	end: PixelPoint,
+	length_px: f32,
+}
 
-	let mut max_valid_height = 0.0;
-	let mut best_y_start = 0.0;
-	let mut valid_columns = 0;
+struct HoughAccumulator {
+	data: Vec<u32>,
+	rho_bins: usize,
+	theta_bins: usize,
+	max_rho: f32,
+	sin_table: [f32; THETA_BINS],
+	cos_table: [f32; THETA_BINS],
+}
 
-	for &pct in &scan_percentages {
-		let check_x = pattern.start_x + (total_width as f32 * pct) as usize;
-		if check_x >= img.width {
-			continue;
+impl HoughAccumulator {
+	fn new(image_width: usize, image_height: usize) -> Self {
+		let max_rho =
+			((image_width * image_width + image_height * image_height) as f64).sqrt() as f32;
+		let rho_bins = (2.0 * max_rho).ceil() as usize + 1;
+
+		let mut sin_table = [0.0f32; THETA_BINS];
+		let mut cos_table = [0.0f32; THETA_BINS];
+
+		for theta_deg in 0..THETA_BINS {
+			let theta_rad = (theta_deg as f64) * PI / 180.0;
+			sin_table[theta_deg] = theta_rad.sin() as f32;
+			cos_table[theta_deg] = theta_rad.cos() as f32;
 		}
 
-		let v_runs = get_column_run_lengths(img, check_x);
-		let Some(v_runs) = v_runs else { continue };
+		Self {
+			data: vec![0u32; rho_bins * THETA_BINS],
+			rho_bins,
+			theta_bins: THETA_BINS,
+			max_rho,
+			sin_table,
+			cos_table,
+		}
+	}
 
-		if let Some(span) = find_and_expand_pattern(&v_runs) {
-			let col_height = (span.end_x - span.start_x) as f32;
-			let square_ratio = pattern.avg_square_width / span.avg_width;
+	#[inline]
+	fn rho_to_index(&self, rho: Rho) -> usize {
+		let idx = ((rho.0 + self.max_rho) as isize).max(0) as usize;
+		idx.min(self.rho_bins - 1)
+	}
 
-			if (PARAMS.square_aspect_min..=PARAMS.square_aspect_max).contains(&square_ratio) {
-				valid_columns += 1;
-				if col_height > max_valid_height {
-					max_valid_height = col_height;
-					best_y_start = span.start_x as f32;
+	#[inline]
+	fn index_to_rho(&self, index: usize) -> Rho {
+		Rho(index as f32 - self.max_rho)
+	}
+
+	#[inline]
+	fn vote(&mut self, rho: Rho, theta: ThetaDeg) {
+		let rho_idx = self.rho_to_index(rho);
+		let idx = theta.0 * self.rho_bins + rho_idx;
+		if idx < self.data.len() {
+			// safe increment
+			self.data[idx] = self.data[idx].saturating_add(1);
+		}
+	}
+
+	#[inline]
+	fn get_votes(&self, rho_idx: usize, theta: ThetaDeg) -> VoteCount {
+		let idx = theta.0 * self.rho_bins + rho_idx;
+		if idx < self.data.len() {
+			VoteCount(self.data[idx])
+		} else {
+			VoteCount(0)
+		}
+	}
+
+	fn trig_for(&self, theta: ThetaDeg) -> (f32, f32) {
+		(self.cos_table[theta.0], self.sin_table[theta.0])
+	}
+}
+
+fn sobel_edge_detection(image: &GrayImage, threshold: u16) -> EdgeMap {
+	let width = image.width() as usize;
+	let height = image.height() as usize;
+	let raw = image.as_raw();
+
+	let mut edge_map = EdgeMap::new(width, height);
+
+	for y in 1..height.saturating_sub(1) {
+		for x in 1..width.saturating_sub(1) {
+			let mut gx: i32 = 0;
+			let mut gy: i32 = 0;
+
+			for ky in 0..3 {
+				for kx in 0..3 {
+					let px = x + kx - 1;
+					let py = y + ky - 1;
+					let pixel = raw[py * width + px] as i32;
+
+					gx += pixel * SOBEL_GX[ky][kx] as i32;
+					gy += pixel * SOBEL_GY[ky][kx] as i32;
+				}
+			}
+
+			let magnitude = ((gx * gx + gy * gy) as f64).sqrt() as u16;
+
+			if magnitude > threshold {
+				edge_map.set_edge(PixelIdx(x), PixelIdx(y));
+			}
+		}
+	}
+
+	edge_map
+}
+
+fn hough_voting(edge_map: &EdgeMap, accumulator: &mut HoughAccumulator) {
+	let width = edge_map.width();
+	let height = edge_map.height();
+
+	for y in 0..height {
+		for x in 0..width {
+			if edge_map.is_edge(PixelIdx(x), PixelIdx(y)) {
+				for theta_deg in 0..THETA_BINS {
+					let theta = ThetaDeg(theta_deg);
+					let (cos_t, sin_t) = accumulator.trig_for(theta);
+					let rho_val = (x as f32) * cos_t + (y as f32) * sin_t;
+					accumulator.vote(Rho(rho_val), theta);
 				}
 			}
 		}
 	}
-
-	if valid_columns >= 2 {
-		Some(VerticalScanResult {
-			max_height: max_valid_height,
-			y_start: best_y_start,
-		})
-	} else {
-		None
-	}
 }
 
-fn get_column_run_lengths(img: &ImageView, x: usize) -> Option<Vec<Run>> {
-	if img.height == 0 {
+fn detect_peaks(
+	accumulator: &HoughAccumulator, vote_threshold: VoteCount, max_lines: usize,
+) -> Vec<HoughLine> {
+	let mut peaks: Vec<HoughLine> = Vec::new();
+
+	for theta_deg in 0..accumulator.theta_bins {
+		let theta = ThetaDeg(theta_deg);
+		for rho_idx in 0..accumulator.rho_bins {
+			let votes = accumulator.get_votes(rho_idx, theta);
+			if votes.0 < vote_threshold.0 {
+				continue;
+			}
+
+			let mut is_max = true;
+			'nms: for dt in 0..=NMS_WINDOW_THETA {
+				for dr in 0..=NMS_WINDOW_RHO {
+					if dt == 0 && dr == 0 {
+						continue;
+					}
+
+					let checks = [
+						(rho_idx.wrapping_add(dr), theta_deg.wrapping_add(dt)),
+						(rho_idx.wrapping_sub(dr), theta_deg.wrapping_add(dt)),
+						(rho_idx.wrapping_add(dr), theta_deg.wrapping_sub(dt)),
+						(rho_idx.wrapping_sub(dr), theta_deg.wrapping_sub(dt)),
+					];
+
+					for (r, t) in checks {
+						if r < accumulator.rho_bins && t < accumulator.theta_bins {
+							let other_votes = accumulator.get_votes(r, ThetaDeg(t));
+							if other_votes.0 > votes.0 {
+								is_max = false;
+								break 'nms;
+							}
+						}
+					}
+				}
+			}
+
+			if is_max {
+				peaks.push(HoughLine {
+					rho: accumulator.index_to_rho(rho_idx),
+					theta,
+					votes,
+				});
+			}
+		}
+	}
+
+	peaks.sort_by(|a, b| b.votes.0.cmp(&a.votes.0));
+	peaks.truncate(max_lines);
+
+	peaks
+}
+
+fn measure_hough_line_segment(
+	edge_map: &EdgeMap, line: &HoughLine, gap_tol: usize,
+) -> Option<MeasuredSegment> {
+	let width = edge_map.width();
+	let height = edge_map.height();
+
+	if width == 0 || height == 0 {
 		return None;
 	}
 
-	let mut runs = Vec::with_capacity(64);
-	let mut current_run = 1usize;
-	let mut last_val = img.column_pixel(x, 0);
+	let theta_rad = (line.theta.0 as f64) * PI / 180.0;
+	let cos_t = theta_rad.cos() as f32;
+	let sin_t = theta_rad.sin() as f32;
+	let rho = line.rho.0;
 
-	for y in 1..img.height {
-		let val = img.column_pixel(x, y);
-		let diff = (val as i16 - last_val as i16).abs();
-		if diff > RUN_TRANSITION_THRESHOLD {
-			if current_run >= PARAMS.min_square_size {
-				runs.push(Run {
-					len: current_run,
-					x_pos: y,
-				});
-			}
-			current_run = 0;
-			last_val = val;
-		} else {
-			current_run += 1;
+	let mut intersections: Vec<PixelPoint> = Vec::with_capacity(4);
+
+	// x = 0
+	if sin_t.abs() > EPSILON {
+		let y = rho / sin_t;
+		if (0.0..(height as f32)).contains(&y) {
+			intersections.push(PixelPoint::new(0.0, y));
 		}
 	}
-	if current_run >= PARAMS.min_square_size {
-		runs.push(Run {
-			len: current_run,
-			x_pos: img.height,
-		});
-	}
 
-	Some(runs)
-}
-
-fn calculate_board_score(
-	total_width: f32, board_ratio: f32, grid_confidence: f32, square_count: usize,
-) -> f32 {
-	let squareness_factor = 1.0 - (1.0 - board_ratio).abs();
-	let eight_by_eight_bonus = if square_count == BOARD_SIZE { 2.0 } else { 0.5 };
-	total_width * grid_confidence * squareness_factor * eight_by_eight_bonus
-}
-
-const RUN_TRANSITION_THRESHOLD: i16 = 25;
-
-fn get_run_lengths_with_pos(pixels: &[u8]) -> Option<Vec<Run>> {
-	let first_pixel = *pixels.first()?;
-
-	let mut runs = Vec::with_capacity(64);
-	let mut current_run = 1usize;
-	let mut last_val = first_pixel;
-
-	for (i, &val) in pixels.iter().enumerate().skip(1) {
-		let diff = (val as i16 - last_val as i16).abs();
-		if diff > RUN_TRANSITION_THRESHOLD {
-			if current_run >= PARAMS.min_square_size {
-				runs.push(Run {
-					len: current_run,
-					x_pos: i,
-				});
-			}
-			current_run = 0;
-			last_val = val;
-		} else {
-			current_run += 1;
+	// x = width-1
+	if sin_t.abs() > EPSILON {
+		let x = (width - 1) as f32;
+		let y = (rho - x * cos_t) / sin_t;
+		if (0.0..(height as f32)).contains(&y) {
+			intersections.push(PixelPoint::new(x, y));
 		}
 	}
-	if current_run >= PARAMS.min_square_size {
-		runs.push(Run {
-			len: current_run,
-			x_pos: pixels.len(),
-		});
-	}
-	Some(runs)
-}
 
-fn find_and_expand_pattern(runs: &[Run]) -> Option<PatternSpan> {
-	if runs.len() < PARAMS.min_runs {
+	// y = 0
+	if cos_t.abs() > EPSILON {
+		let x = rho / cos_t;
+		if (0.0..(width as f32)).contains(&x) {
+			intersections.push(PixelPoint::new(x, 0.0));
+		}
+	}
+
+	// y = height-1
+	if cos_t.abs() > EPSILON {
+		let y = (height - 1) as f32;
+		let x = (rho - y * sin_t) / cos_t;
+		if (0.0..(width as f32)).contains(&x) {
+			intersections.push(PixelPoint::new(x, y));
+		}
+	}
+
+	if intersections.len() < 2 {
 		return None;
 	}
 
-	let (start_idx, seed_avg) = find_seed_pattern(runs)?;
+	let (p0, p1) = find_most_distant_points(&intersections);
 
-	let (current_start, current_end) = expand_pattern(runs, start_idx, seed_avg);
+	let (dx, dy) = (p1.x.0 - p0.x.0, p1.y.0 - p0.y.0);
+	let steps = (dx.abs().max(dy.abs()) as usize).max(1);
 
-	let (final_start, final_end) = select_best_subsequence(runs, current_start, current_end)?;
+	let mut edge_samples: Vec<(usize, PixelPoint)> = Vec::with_capacity(steps + 1);
 
-	let final_start_x = runs[final_start]
-		.x_pos
-		.saturating_sub(runs[final_start].len);
+	for i in 0..=steps {
+		let t = i as f32 / steps as f32;
+		let x = p0.x.0 + dx * t;
+		let y = p0.y.0 + dy * t;
+		let xi = x.round() as usize;
+		let yi = y.round() as usize;
 
-	let final_end_x = runs[final_end].x_pos;
-	let final_count = final_end - final_start + 1;
+		if xi < width && yi < height && edge_map.is_edge(PixelIdx(xi), PixelIdx(yi)) {
+			edge_samples.push((i, PixelPoint::new(x, y)));
+		}
+	}
 
-	let full_seq_sum: usize = runs[final_start..=final_end].iter().map(|r| r.len).sum();
-	let final_avg = full_seq_sum as f32 / final_count as f32;
+	if edge_samples.is_empty() {
+		return None;
+	}
 
-	Some(PatternSpan {
-		start_x: final_start_x,
-		end_x: final_end_x,
-		avg_width: final_avg,
-		count: final_count,
+	let (best_start_idx, best_end_idx) = find_longest_run_with_gaps(&edge_samples, gap_tol);
+
+	if best_start_idx >= edge_samples.len() || best_end_idx >= edge_samples.len() {
+		return None;
+	}
+
+	let start = edge_samples[best_start_idx].1;
+	let end = edge_samples[best_end_idx].1;
+
+	let length_px = {
+		let dx = end.x.0 - start.x.0;
+		let dy = end.y.0 - start.y.0;
+		(dx * dx + dy * dy).sqrt()
+	};
+
+	let potential_length = ((p1.x.0 - p0.x.0).powi(2) + (p1.y.0 - p0.y.0).powi(2)).sqrt();
+	if length_px < potential_length * MIN_SEGMENT_FRACTION {
+		return None;
+	}
+
+	Some(MeasuredSegment {
+		start,
+		end,
+		length_px,
 	})
 }
 
-fn find_seed_pattern(runs: &[Run]) -> Option<(usize, f32)> {
-	for i in 0..=runs.len().saturating_sub(PARAMS.min_runs) {
-		let window = &runs[i..i + PARAMS.min_runs];
+fn find_most_distant_points(points: &[PixelPoint]) -> (PixelPoint, PixelPoint) {
+	debug_assert!(points.len() >= 2);
+	let mut max_dist_sq = 0.0f32;
+	let mut best_pair = (points[0], points[1]);
 
-		let (min_len, max_len, sum) = window
-			.iter()
-			.map(|r| r.len)
-			.fold((usize::MAX, 0usize, 0usize), |(min, max, sum), len| {
-				(min.min(len), max.max(len), sum + len)
-			});
+	for i in 0..points.len() {
+		for j in (i + 1)..points.len() {
+			let dx = points[j].x.0 - points[i].x.0;
+			let dy = points[j].y.0 - points[i].y.0;
+			let dist_sq = dx * dx + dy * dy;
+			if dist_sq > max_dist_sq {
+				max_dist_sq = dist_sq;
+				best_pair = (points[i], points[j]);
+			}
+		}
+	}
 
-		if min_len == usize::MAX {
+	best_pair
+}
+
+fn find_longest_run_with_gaps(samples: &[(usize, PixelPoint)], gap_tol: usize) -> (usize, usize) {
+	if samples.is_empty() {
+		return (0, 0);
+	}
+
+	let mut best_start = 0usize;
+	let mut best_end = 0usize;
+	let mut best_length = 0usize;
+
+	let mut run_start = 0usize;
+	let mut run_end = 0usize;
+
+	for i in 1..samples.len() {
+		let gap = samples[i].0 - samples[i - 1].0;
+
+		if gap <= gap_tol + 1 {
+			run_end = i;
+		} else {
+			let run_length = samples[run_end].0 - samples[run_start].0;
+			if run_length > best_length {
+				best_length = run_length;
+				best_start = run_start;
+				best_end = run_end;
+			}
+			run_start = i;
+			run_end = i;
+		}
+	}
+
+	let run_length = samples[run_end].0 - samples[run_start].0;
+	if run_length > best_length {
+		best_start = run_start;
+		best_end = run_end;
+	}
+
+	(best_start, best_end)
+}
+
+fn cluster_lines_full(lines: &[HoughLine]) -> (Vec<HoughLine>, Vec<HoughLine>) {
+	let mut vertical_lines: Vec<HoughLine> = Vec::new();
+	let mut horizontal_lines: Vec<HoughLine> = Vec::new();
+
+	for line in lines {
+		let theta = line.theta.0;
+		if theta <= VERTICAL_THETA_TOLERANCE || theta >= (180 - VERTICAL_THETA_TOLERANCE) {
+			vertical_lines.push(*line);
+		} else if (90 - HORIZONTAL_THETA_TOLERANCE..=90 + HORIZONTAL_THETA_TOLERANCE)
+			.contains(&theta)
+		{
+			horizontal_lines.push(*line);
+		}
+	}
+
+	(vertical_lines, horizontal_lines)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GridPattern {
+	start: GridPosition,
+	end: GridPosition,
+	spacing: GridSpacing,
+}
+
+fn compute_vertical_span(
+	vertical_lines: &[HoughLine], edge_map: &EdgeMap, v_grid: &GridPattern,
+) -> Option<(f32, f32)> {
+	let mut y_starts: Vec<f32> = Vec::new();
+	let mut y_ends: Vec<f32> = Vec::new();
+
+	let tolerance = (v_grid.spacing.0 * 0.05).min(8.0);
+
+	for line in vertical_lines {
+		if line.rho.0 < v_grid.start.0 - tolerance || line.rho.0 > v_grid.end.0 + tolerance {
 			continue;
 		}
 
-		let avg_len = sum as f32 / PARAMS.min_runs as f32;
+		if let Some(segment) = measure_hough_line_segment(edge_map, line, SEGMENT_GAP_TOLERANCE) {
+			let y_min = segment.start.y.0.min(segment.end.y.0);
+			let y_max = segment.start.y.0.max(segment.end.y.0);
 
-		if (max_len as f32 - min_len as f32) < (avg_len * PARAMS.variance_tolerance) {
-			return Some((i, avg_len));
-		}
-	}
-	None
-}
-
-fn expand_pattern(runs: &[Run], start_idx: usize, seed_avg: f32) -> (usize, usize) {
-	let mut current_start = start_idx;
-	let mut current_end = start_idx + PARAMS.min_runs - 1;
-
-	while current_start > 0 {
-		let prev_run = &runs[current_start - 1];
-		if (prev_run.len as f32 - seed_avg).abs() < (seed_avg * PARAMS.expansion_tolerance) {
-			current_start -= 1;
-		} else {
-			break;
-		}
-	}
-
-	while current_end < runs.len() - 1 {
-		let next_run = &runs[current_end + 1];
-		if (next_run.len as f32 - seed_avg).abs() < (seed_avg * PARAMS.expansion_tolerance) {
-			current_end += 1;
-		} else {
-			break;
-		}
-	}
-
-	(current_start, current_end)
-}
-
-fn select_best_subsequence(runs: &[Run], start: usize, end: usize) -> Option<(usize, usize)> {
-	let count = end - start + 1;
-	if count <= BOARD_SIZE {
-		return Some((start, end));
-	}
-
-	let mut best_sub_start = start;
-	let mut min_variance = f32::MAX;
-
-	for i in start..=(end.saturating_sub(BOARD_SIZE - 1)) {
-		let window = &runs[i..i + BOARD_SIZE];
-
-		let (min_l, max_l) = window
-			.iter()
-			.map(|r| r.len)
-			.fold((usize::MAX, 0usize), |(min, max), len| {
-				(min.min(len), max.max(len))
-			});
-
-		if min_l == usize::MAX {
-			continue;
-		}
-
-		let variance = max_l as f32 - min_l as f32;
-
-		if variance < min_variance {
-			min_variance = variance;
-			best_sub_start = i;
-		}
-	}
-
-	Some((best_sub_start, best_sub_start + BOARD_SIZE - 1))
-}
-
-const GRID_DIFF_THRESHOLD: i16 = 15;
-
-fn verify_grid_pattern(img: &ImageView, x: f32, y: f32, width: f32, height: f32) -> f32 {
-	let cell_width = width / BOARD_SIZE as f32;
-	let cell_height = height / BOARD_SIZE as f32;
-
-	let mut cell_values = [[0u8; BOARD_SIZE]; BOARD_SIZE];
-
-	for (row, cell_row) in cell_values.iter_mut().enumerate() {
-		for (col, cell) in cell_row.iter_mut().enumerate() {
-			let center_x = (x + (col as f32 + 0.5) * cell_width) as usize;
-			let center_y = (y + (row as f32 + 0.5) * cell_height) as usize;
-
-			if center_x >= img.width || center_y >= img.height {
-				return 0.0;
-			}
-
-			*cell = img.pixel_at(center_x, center_y);
-		}
-	}
-
-	let pattern_confidence = calculate_pattern_confidence(&cell_values);
-	let adjacent_confidence = calculate_adjacent_confidence(&cell_values);
-
-	(pattern_confidence + adjacent_confidence) / 2.0
-}
-
-fn calculate_pattern_confidence(cell_values: &[[u8; BOARD_SIZE]; BOARD_SIZE]) -> f32 {
-	let mut all_values: Vec<u8> = cell_values.iter().flatten().copied().collect();
-	all_values.sort_unstable();
-	let median = all_values[BOARD_SIZE * BOARD_SIZE / 2];
-
-	let mut pattern_a_valid = 0;
-	let mut pattern_b_valid = 0;
-
-	for (row, cell_row) in cell_values.iter().enumerate() {
-		for (col, &val) in cell_row.iter().enumerate() {
-			let is_light = val > median;
-			let expect_light_a = (row + col) % 2 == 0;
-			let expect_light_b = (row + col) % 2 == 1;
-
-			if is_light == expect_light_a {
-				pattern_a_valid += 1;
-			}
-			if is_light == expect_light_b {
-				pattern_b_valid += 1;
+			let expected_height = v_grid.spacing.0 * 8.0;
+			if segment.length_px >= expected_height * 0.4 {
+				y_starts.push(y_min);
+				y_ends.push(y_max);
 			}
 		}
 	}
 
-	let best_valid = pattern_a_valid.max(pattern_b_valid);
-	best_valid as f32 / (BOARD_SIZE * BOARD_SIZE) as f32
-}
-
-fn calculate_adjacent_confidence(cell_values: &[[u8; BOARD_SIZE]; BOARD_SIZE]) -> f32 {
-	let mut adjacent_differ = 0;
-	let mut adjacent_total = 0;
-
-	for cell_row in cell_values {
-		for col in 0..(BOARD_SIZE - 1) {
-			let diff = (cell_row[col] as i16 - cell_row[col + 1] as i16).abs();
-			if diff > GRID_DIFF_THRESHOLD {
-				adjacent_differ += 1;
-			}
-			adjacent_total += 1;
-		}
-	}
-
-	for row in 0..(BOARD_SIZE - 1) {
-		for (col, &val) in cell_values[row].iter().enumerate() {
-			let diff = (val as i16 - cell_values[row + 1][col] as i16).abs();
-			if diff > GRID_DIFF_THRESHOLD {
-				adjacent_differ += 1;
-			}
-			adjacent_total += 1;
-		}
-	}
-
-	adjacent_differ as f32 / adjacent_total as f32
-}
-
-const CORNER_SEARCH_MARGIN: f32 = 0.05;
-const EDGE_GRADIENT_THRESHOLD: i16 = 20;
-const EDGE_SAMPLE_POSITIONS: [f32; 5] = [0.2, 0.35, 0.5, 0.65, 0.8];
-
-fn refine_board_corners(img: &ImageView, rect: Rect) -> Rect {
-	let margin_x = rect.width() * CORNER_SEARCH_MARGIN;
-	let margin_y = rect.height() * CORNER_SEARCH_MARGIN;
-
-	let left = refine_edge_with_samples(
-		img,
-		EdgeSearchParams {
-			start_x: rect.x(),
-			start_y: rect.y(),
-			perpendicular_length: rect.height(),
-			axis: Axis::Horizontal,
-			search_distance: margin_x,
-		},
-		-1.0,
-	);
-
-	let right = refine_edge_with_samples(
-		img,
-		EdgeSearchParams {
-			start_x: rect.x() + rect.width(),
-			start_y: rect.y(),
-			perpendicular_length: rect.height(),
-			axis: Axis::Horizontal,
-			search_distance: margin_x,
-		},
-		1.0,
-	);
-
-	let top = refine_edge_with_samples(
-		img,
-		EdgeSearchParams {
-			start_x: rect.x(),
-			start_y: rect.y(),
-			perpendicular_length: rect.width(),
-			axis: Axis::Vertical,
-			search_distance: margin_y,
-		},
-		-1.0,
-	);
-
-	let bottom = refine_edge_with_samples(
-		img,
-		EdgeSearchParams {
-			start_x: rect.x(),
-			start_y: rect.y() + rect.height(),
-			perpendicular_length: rect.width(),
-			axis: Axis::Vertical,
-			search_distance: margin_y,
-		},
-		1.0,
-	);
-
-	let new_x = left;
-	let new_y = top;
-	let new_width = right - left;
-	let new_height = bottom - top;
-
-	if new_width <= 0.0 || new_height <= 0.0 {
-		return rect;
-	}
-
-	let aspect_ratio = new_width / new_height;
-	if !(0.9..=1.1).contains(&aspect_ratio) {
-		let size = new_width.min(new_height);
-		let center_x = new_x + new_width / 2.0;
-		let center_y = new_y + new_height / 2.0;
-		return Rect::new(center_x - size / 2.0, center_y - size / 2.0, size, size);
-	}
-
-	Rect::new(new_x, new_y, new_width, new_height)
-}
-
-fn refine_edge_with_samples(img: &ImageView, params: EdgeSearchParams, dir_sign: f32) -> f32 {
-	let mut positions: Vec<f32> = Vec::with_capacity(EDGE_SAMPLE_POSITIONS.len());
-
-	for &pct in &EDGE_SAMPLE_POSITIONS {
-		let (sample_x, sample_y) = match params.axis {
-			Axis::Horizontal => (
-				params.start_x,
-				params.start_y + params.perpendicular_length * pct,
-			),
-			Axis::Vertical => (
-				params.start_x + params.perpendicular_length * pct,
-				params.start_y,
-			),
-		};
-
-		let pos = refine_edge_position(
-			img,
-			sample_x,
-			sample_y,
-			params.axis,
-			dir_sign,
-			params.search_distance,
-		);
-		positions.push(pos);
-	}
-
-	if positions.is_empty() {
-		return match params.axis {
-			Axis::Horizontal => params.start_x,
-			Axis::Vertical => params.start_y,
-		};
-	}
-
-	positions.sort_by(|a, b| a.total_cmp(b));
-	positions[positions.len() / 2]
-}
-
-fn refine_edge_position(
-	img: &ImageView, start_x: f32, start_y: f32, axis: Axis, dir_sign: f32, search_distance: f32,
-) -> f32 {
-	let steps = search_distance as usize;
-	let default_position = match axis {
-		Axis::Horizontal => start_x,
-		Axis::Vertical => start_y,
-	};
-
-	for i in 0..steps {
-		let offset = i as f32;
-
-		let (x_pos, y_pos) = match axis {
-			Axis::Horizontal => (start_x + dir_sign * offset, start_y),
-			Axis::Vertical => (start_x, start_y + dir_sign * offset),
-		};
-		if let Some(pos) = check_gradient_at(img, x_pos, y_pos, axis) {
-			return pos;
-		}
-
-		if i > 0 {
-			let (x_neg, y_neg) = match axis {
-				Axis::Horizontal => (start_x - dir_sign * offset, start_y),
-				Axis::Vertical => (start_x, start_y - dir_sign * offset),
-			};
-			if let Some(pos) = check_gradient_at(img, x_neg, y_neg, axis) {
-				return pos;
-			}
-		}
-	}
-
-	default_position
-}
-
-fn check_gradient_at(img: &ImageView, x: f32, y: f32, axis: Axis) -> Option<f32> {
-	let xi = x as usize;
-	let yi = y as usize;
-
-	if xi < 1 || xi >= img.width - 1 || yi < 1 || yi >= img.height - 1 {
+	if y_starts.len() < 3 {
 		return None;
 	}
 
-	let gradient = match axis {
-		Axis::Horizontal => compute_horizontal_gradient(img, xi, yi),
-		Axis::Vertical => compute_vertical_gradient(img, xi, yi),
+	y_starts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+	y_ends.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+
+	let median_y_start = y_starts[y_starts.len() / 2];
+	let median_y_end = y_ends[y_ends.len() / 2];
+
+	Some((median_y_start, median_y_end))
+}
+
+fn filter_horizontals_by_vertical_span(
+	horizontal_lines: &[HoughLine], edge_map: &EdgeMap, v_span: (f32, f32), v_grid: &GridPattern,
+) -> Vec<f32> {
+	let (v_y_start, v_y_end) = v_span;
+	let mut filtered_rhos: Vec<f32> = Vec::new();
+	let margin = v_grid.spacing.0 * 0.25;
+
+	for line in horizontal_lines {
+		if line.rho.0 < v_y_start - margin || line.rho.0 > v_y_end + margin {
+			continue;
+		}
+
+		if let Some(segment) = measure_hough_line_segment(edge_map, line, SEGMENT_GAP_TOLERANCE) {
+			let x_min = segment.start.x.0.min(segment.end.x.0);
+			let x_max = segment.start.x.0.max(segment.end.x.0);
+
+			let overlap_start = x_min.max(v_grid.start.0);
+			let overlap_end = x_max.min(v_grid.end.0);
+			let overlap = (overlap_end - overlap_start).max(0.0);
+
+			let v_width = v_grid.end.0 - v_grid.start.0;
+			let overlap_ratio = if v_width > 0.0 {
+				overlap / v_width
+			} else {
+				0.0
+			};
+
+			if overlap_ratio >= 0.66 {
+				filtered_rhos.push(line.rho.0);
+			}
+		}
+	}
+
+	filtered_rhos
+}
+
+fn extract_rect_from_lines_with_segments(lines: &[HoughLine], edge_map: &EdgeMap) -> Rect {
+	if lines.is_empty() {
+		return Rect::new(0.0, 0.0, 0.0, 0.0);
+	}
+
+	let (vertical_lines, horizontal_lines) = cluster_lines_full(lines);
+
+	let mut vertical_rhos: Vec<f32> = vertical_lines.iter().map(|l| l.rho.0).collect();
+
+	let v_grid = find_best_grid(&mut vertical_rhos, None);
+
+	let Some(v_grid) = v_grid else {
+		return Rect::new(0.0, 0.0, 0.0, 0.0);
 	};
 
-	if gradient > EDGE_GRADIENT_THRESHOLD {
-		Some(match axis {
-			Axis::Horizontal => x,
-			Axis::Vertical => y,
-		})
+	let v_span = compute_vertical_span(&vertical_lines, edge_map, &v_grid);
+
+	let (mut horizontal_rhos, expected_h_spacing) = if let Some(v_span) = v_span {
+		let filtered =
+			filter_horizontals_by_vertical_span(&horizontal_lines, edge_map, v_span, &v_grid);
+
+		let measured_height = v_span.1 - v_span.0;
+		let spacing_from_span = measured_height / 8.0;
+
+		(filtered, spacing_from_span)
 	} else {
-		None
+		(
+			horizontal_lines.iter().map(|l| l.rho.0).collect(),
+			v_grid.spacing.0,
+		)
+	};
+
+	let h_grid = find_best_grid(&mut horizontal_rhos, Some(expected_h_spacing));
+
+	let Some(h_grid) = h_grid else {
+		return Rect::new(0.0, 0.0, 0.0, 0.0);
+	};
+
+	let mut width = v_grid.end.0 - v_grid.start.0;
+	let mut height = h_grid.end.0 - h_grid.start.0;
+	let mut x = v_grid.start.0;
+	let mut y = h_grid.start.0;
+
+	let v_intervals = ((v_grid.end.0 - v_grid.start.0) / v_grid.spacing.0).round() as usize;
+	let h_intervals = ((h_grid.end.0 - h_grid.start.0) / h_grid.spacing.0).round() as usize;
+
+	if v_intervals == h_intervals {
+		let avg_size = (width + height) / 2.0;
+		let center_x = x + width / 2.0;
+		let center_y = y + height / 2.0;
+
+		width = avg_size;
+		height = avg_size;
+		x = center_x - width / 2.0;
+		y = center_y - height / 2.0;
 	}
+
+	Rect::new(x.max(0.0), y.max(0.0), width, height)
 }
 
-fn compute_horizontal_gradient(img: &ImageView, x: usize, y: usize) -> i16 {
-	let left = img.pixel_at(x - 1, y) as i16;
-	let right = img.pixel_at(x + 1, y) as i16;
-	(right - left).abs()
+fn find_best_grid(rhos: &mut [f32], expected_spacing: Option<f32>) -> Option<GridPattern> {
+	if rhos.len() < 4 {
+		return None;
+	}
+	rhos.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+
+	let mut deduped: Vec<f32> = Vec::new();
+	for &rho in rhos.iter() {
+		if deduped.is_empty() || (rho - deduped.last().unwrap()).abs() > 5.0 {
+			deduped.push(rho);
+		}
+	}
+
+	if deduped.len() < 4 {
+		return None;
+	}
+
+	let mut best_grid: Option<GridPattern> = None;
+	let mut max_score = -f32::INFINITY;
+	let target_count = 9;
+
+	for i in 0..deduped.len() {
+		for j in (i + 1)..deduped.len() {
+			let diff = deduped[j] - deduped[i];
+
+			if diff < 20.0 {
+				continue;
+			}
+
+			if let Some(target) = expected_spacing
+				&& (diff - target).abs() > target * 0.05
+			{
+				continue;
+			}
+
+			let spacing = diff;
+			let (matched_count, first_match, last_match) =
+				count_grid_matches(&deduped, deduped[i], spacing);
+
+			if matched_count < 7 {
+				continue;
+			}
+			if matched_count > 11 {
+				continue;
+			}
+
+			let count_diff = (matched_count as f32 - target_count as f32).abs();
+			let count_score = 20.0 - (count_diff * 5.0);
+
+			let spacing_score = if let Some(target) = expected_spacing {
+				let error_pct = (spacing - target).abs() / target;
+				(1.0 - error_pct) * 200.0
+			} else {
+				0.0
+			};
+
+			let span = last_match - first_match;
+			let span_ratio = span / spacing;
+
+			if span_ratio > 10.5 {
+				continue;
+			}
+
+			let ideal_span = 8.0;
+			let span_diff = (span_ratio - ideal_span).abs();
+			let compactness_score = (25.0 - span_diff * 15.0).max(0.0);
+
+			let score = count_score + spacing_score + compactness_score;
+
+			if score > max_score {
+				max_score = score;
+				best_grid = Some(GridPattern {
+					start: GridPosition(first_match),
+					end: GridPosition(last_match),
+					spacing: GridSpacing(spacing),
+				});
+			}
+		}
+	}
+
+	best_grid
 }
 
-fn compute_vertical_gradient(img: &ImageView, x: usize, y: usize) -> i16 {
-	let top = img.pixel_at(x, y - 1) as i16;
-	let bottom = img.pixel_at(x, y + 1) as i16;
-	(bottom - top).abs()
+fn count_grid_matches(rhos: &[f32], start: f32, spacing: f32) -> (usize, f32, f32) {
+	let mut matches = 0;
+	let mut first_pos = start;
+	let mut last_pos = start;
+	let mut found_any = false;
+
+	let tolerance = (spacing * 0.05).min(8.0);
+
+	for k in -8..=12 {
+		let target = start + (k as f32 * spacing);
+
+		let found = rhos.iter().any(|&r| (r - target).abs() < tolerance);
+
+		if found {
+			matches += 1;
+			if !found_any {
+				first_pos = target;
+				found_any = true;
+			} else if target < first_pos {
+				first_pos = target;
+			}
+			if target > last_pos {
+				last_pos = target;
+			}
+		}
+	}
+
+	if !found_any {
+		return (0, start, start);
+	}
+
+	(matches, first_pos, last_pos)
+}
+
+pub fn detect_board_hough(image: &GrayImage) -> Option<DetectedBoard> {
+	let width = image.width() as usize;
+	let height = image.height() as usize;
+
+	if width == 0 || height == 0 {
+		return None;
+	}
+
+	let edge_map = sobel_edge_detection(image, EDGE_THRESHOLD);
+
+	let mut accumulator = HoughAccumulator::new(width, height);
+	hough_voting(&edge_map, &mut accumulator);
+
+	let vote_threshold = VoteCount(((width.min(height) / 10).max(20)) as u32);
+	let max_lines = 200;
+
+	let lines_raw = detect_peaks(&accumulator, vote_threshold, max_lines);
+	if lines_raw.is_empty() {
+		return None;
+	}
+
+	let rect = extract_rect_from_lines_with_segments(&lines_raw, &edge_map);
+	if rect.is_empty() {
+		return None;
+	}
+
+	let aspect_ratio = rect.width() / rect.height();
+	if !(0.7..=1.3).contains(&aspect_ratio) {
+		return None;
+	}
+
+	let min_dimension = (width.min(height) as f32) * 0.1;
+	if rect.width() < min_dimension || rect.height() < min_dimension {
+		return None;
+	}
+
+	Some(DetectedBoard::new(rect))
 }

@@ -12,8 +12,7 @@ use winit::event_loop::EventLoopProxy;
 
 use crate::{
 	capture::screen::ScreenCapture,
-	chess::PlayerColor,
-	model::detected::{BoardState, DetectedBoard},
+	model::detected::{BoardOrientation, BoardState, DetectedBoard},
 	ui::{SharedBoardState, UserEvent},
 	vision::detector::ChessDetector,
 };
@@ -69,10 +68,11 @@ fn run_detection_loop(
 		"Detection loop started (interval: {:?})",
 		DETECTION_INTERVAL
 	);
-	let mut detected_player_color: Option<PlayerColor> = None;
+	let mut detected_orientation: Option<BoardOrientation> = None;
 
 	let mut cached_board: Option<DetectedBoard> = None;
 	let mut frames_since_board_detection = BOARD_DETECTION_INTERVAL_FRAMES;
+	let mut was_at_start_pos = false;
 
 	while !shutdown.load(Ordering::SeqCst) {
 		let loop_start = Instant::now();
@@ -148,16 +148,37 @@ fn run_detection_loop(
 		};
 
 		let mut board = board;
-		if !pieces.is_empty() && detected_player_color.is_none() {
+		if !pieces.is_empty() && detected_orientation.is_none() {
 			let temp_state = BoardState::new(board, pieces.clone());
-			let player_color = temp_state.detect_orientation();
+			let orientation = temp_state.detect_orientation();
 
-			detected_player_color = Some(player_color);
+			detected_orientation = Some(orientation);
 
-			tracing::info!("Playing as {}", player_color);
+			if let Some(color) = orientation.to_player_color() {
+				tracing::info!("Playing as {}", color);
+			}
 		}
 
-		board.player_color = detected_player_color.unwrap_or(PlayerColor::White);
+		board.orientation = detected_orientation.unwrap_or(BoardOrientation::Unknown);
+
+		if !pieces.is_empty() && board.orientation != BoardOrientation::Unknown {
+			let temp_state = BoardState::new(board, pieces.clone());
+			if let Ok(fen) = temp_state.to_fen() {
+				let fen_str = fen.as_str();
+				let is_start = fen_str.starts_with("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR")
+					|| fen_str.starts_with("RNBKQBNR/PPPPPPPP/8/8/8/8/pppppppp/rnbkqbnr");
+
+				if is_start {
+					if !was_at_start_pos {
+						tracing::info!("Starting position detected, resetting orientation");
+						detected_orientation = None;
+						was_at_start_pos = true;
+					}
+				} else {
+					was_at_start_pos = false;
+				}
+			}
+		}
 
 		if !pieces.is_empty() && pieces.len() <= crate::vision::detector::MAX_PIECES {
 			let mut state_lock = board_state.lock();
