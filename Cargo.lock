@@ -1392,6 +1392,7 @@ dependencies = [
  "once_cell",
  "ort",
  "parking_lot",
+ "polyglot-book-rs",
  "raqote",
  "rayon",
  "ruci",
@@ -2155,6 +2156,12 @@ dependencies = [
  "rustix 1.0.7",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "polyglot-book-rs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2800f836be0e33f035784fb1dba3e44204fc78098e232a7d67ea1a63db3c79d"
 
 [[package]]
 name = "portable-atomic"

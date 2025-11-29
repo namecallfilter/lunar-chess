@@ -24,6 +24,7 @@ pub struct DetectionConfig {
 pub struct EngineConfig {
 	pub path: String,
 	pub args: Vec<String>,
+	pub book: Option<String>,
 	pub profile: String,
 }
 

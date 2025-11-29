@@ -5,11 +5,12 @@ use std::{
 };
 
 use anyhow::Result;
+use polyglot_book_rs::PolyglotBook;
 
 use crate::{
 	chess::Score,
 	config::{CONFIG, PROFILE},
-	errors::AnalysisError,
+	errors::{AnalysisError, Fen},
 };
 
 // TODO: Support mac and linux engine
@@ -48,6 +49,8 @@ pub struct MoveWithScore {
 
 pub struct EngineWrapper {
 	engine: ruci::Engine<BufReader<ChildStdout>, ChildStdin>,
+	book: Option<PolyglotBook>,
+	current_position: Option<Fen>,
 }
 
 impl EngineWrapper {
@@ -57,6 +60,15 @@ impl EngineWrapper {
 			CONFIG.engine.path,
 			CONFIG.engine.profile
 		);
+
+		let book = if let Some(book_path) = &CONFIG.engine.book {
+			tracing::debug!("Loading opening book from {}", book_path);
+			Some(PolyglotBook::load(book_path).map_err(|e| {
+				AnalysisError::EngineStartFailed(format!("Failed to load opening book: {}", e))
+			})?)
+		} else {
+			None
+		};
 
 		let mut process = Command::new(&CONFIG.engine.path)
 			.args(&CONFIG.engine.args)
@@ -87,14 +99,23 @@ impl EngineWrapper {
 			value: Some(PROFILE.multi_pv.to_string().into()),
 		})?;
 
-		Ok(Self { engine })
+		Ok(Self {
+			engine,
+			book,
+			current_position: None,
+		})
 	}
 
-	pub fn set_position(&mut self, fen: &str) -> Result<()> {
-		let parsed_fen = fen.parse().map_err(|e| AnalysisError::InvalidPosition {
-			fen: fen.to_string(),
-			reason: format!("Parse error: {:?}", e),
-		})?;
+	pub fn set_position(&mut self, fen: &Fen) -> Result<()> {
+		let fen_str = fen.as_str();
+		let parsed_fen = fen_str
+			.parse()
+			.map_err(|e| AnalysisError::InvalidPosition {
+				fen: fen_str.to_string(),
+				reason: format!("Parse error: {:?}", e),
+			})?;
+
+		self.current_position = Some(fen.clone());
 
 		self.engine
 			.send(&ruci::Position::Fen {
@@ -103,7 +124,7 @@ impl EngineWrapper {
 			})
 			.map_err(|e| {
 				AnalysisError::InvalidPosition {
-					fen: fen.to_string(),
+					fen: fen_str.to_string(),
 					reason: e.to_string(),
 				}
 				.into()
@@ -111,6 +132,17 @@ impl EngineWrapper {
 	}
 
 	pub fn get_best_moves(&mut self) -> Result<Vec<MoveWithScore>> {
+		if let (Some(book), Some(fen)) = (self.book.as_ref(), self.current_position.as_ref())
+			&& let Some(entry) = book.get_best_move_from_fen(fen.as_str()) {
+				let move_str = entry.move_string;
+				tracing::info!("Opening Book Hit: {} (Weight: {})", move_str, entry.weight);
+
+				return Ok(vec![MoveWithScore {
+					notation: MoveNotation::new(move_str),
+					score: Score::centipawns(0),
+				}]);
+			}
+
 		let mut best_moves: Vec<MoveWithScore> = Vec::new();
 
 		self.engine.go(
