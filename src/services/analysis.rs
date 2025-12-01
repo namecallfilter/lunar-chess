@@ -7,6 +7,8 @@ use std::{
 	time::Duration,
 };
 
+use parking_lot::Condvar;
+
 use crate::{
 	chess::{ChessMove, board},
 	engine::EngineWrapper,
@@ -14,7 +16,7 @@ use crate::{
 	ui::{SharedBoardState, UserEvent},
 };
 
-const ANALYSIS_INTERVAL: Duration = Duration::from_secs(2);
+const SHUTDOWN_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const ENGINE_RESTART_DELAY: Duration = Duration::from_secs(1);
 const ENGINE_INIT_RETRY_DELAY: Duration = Duration::from_secs(5);
 
@@ -26,12 +28,13 @@ pub struct AnalysisService {
 impl AnalysisService {
 	pub fn spawn(
 		proxy: winit::event_loop::EventLoopProxy<UserEvent>, board_state: SharedBoardState,
+		board_changed: Arc<Condvar>,
 	) -> Self {
 		let shutdown = Arc::new(AtomicBool::new(false));
 		let shutdown_clone = Arc::clone(&shutdown);
 
 		let handle = thread::spawn(move || {
-			run_analysis_loop(proxy, board_state, shutdown_clone);
+			run_analysis_loop(proxy, board_state, board_changed, shutdown_clone);
 		});
 
 		Self {
@@ -56,7 +59,7 @@ impl Drop for AnalysisService {
 
 fn run_analysis_loop(
 	proxy: winit::event_loop::EventLoopProxy<UserEvent>, board_state: SharedBoardState,
-	shutdown: Arc<AtomicBool>,
+	board_changed: Arc<Condvar>, shutdown: Arc<AtomicBool>,
 ) {
 	let mut last_analyzed_fen: Option<Fen> = None;
 
@@ -68,13 +71,15 @@ fn run_analysis_loop(
 				tracing::info!("Analysis engine ready");
 
 				while !shutdown.load(Ordering::SeqCst) {
-					thread::sleep(ANALYSIS_INTERVAL);
+					let current_position = {
+						let mut lock = board_state.lock();
+						let _ = board_changed.wait_for(&mut lock, SHUTDOWN_CHECK_INTERVAL);
+						lock.clone()
+					};
 
 					if shutdown.load(Ordering::SeqCst) {
 						break;
 					}
-
-					let current_position = board_state.lock().clone();
 
 					if let Some(state) = current_position {
 						let fen = match state.to_fen() {
@@ -88,6 +93,10 @@ fn run_analysis_loop(
 						if last_analyzed_fen.as_ref() == Some(&fen) {
 							continue;
 						}
+
+						proxy
+							.send_event(UserEvent::UpdateBestMoves(Vec::new()))
+							.ok();
 
 						let player_color = match state.board.player_color() {
 							Some(c) => c,
@@ -106,26 +115,25 @@ fn run_analysis_loop(
 							}
 						}
 
-						match engine.get_best_moves() {
-							Ok(moves_with_scores) => {
-								if !moves_with_scores.is_empty() {
-									let best_moves: Vec<ChessMove> = moves_with_scores
-										.iter()
-										.filter_map(|m| {
-											board::parse_move(m.notation.as_str(), player_color)
-												.map(|mv| {
-													ChessMove::with_score(mv.from, mv.to, m.score)
-												})
-										})
-										.collect();
+						match engine.get_best_moves(|moves_with_scores| {
+							if !moves_with_scores.is_empty() {
+								let best_moves: Vec<ChessMove> = moves_with_scores
+									.iter()
+									.filter_map(|m| {
+										board::parse_move(m.notation.as_str(), player_color).map(
+											|mv| ChessMove::with_score(mv.from, mv.to, m.score),
+										)
+									})
+									.collect();
 
-									if !best_moves.is_empty() {
-										proxy
-											.send_event(UserEvent::UpdateBestMoves(best_moves))
-											.ok();
-									}
+								if !best_moves.is_empty() {
+									proxy
+										.send_event(UserEvent::UpdateBestMoves(best_moves))
+										.ok();
 								}
-
+							}
+						}) {
+							Ok(_) => {
 								last_analyzed_fen = Some(fen);
 							}
 							Err(e) => {
