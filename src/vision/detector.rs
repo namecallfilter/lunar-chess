@@ -1,4 +1,4 @@
-use anyhow::{Context as _, Result};
+use anyhow::{Context, Result};
 use fast_image_resize::{PixelType, Resizer, images::Image};
 use image::{RgbaImage, imageops::grayscale};
 use ndarray::Array4;
@@ -11,7 +11,10 @@ use ort::{
 use crate::{
 	config::CONFIG,
 	model::detected::{DetectedBoard, DetectedPiece, Rect},
-	vision::{board_detection::detect_board_hough, postprocess},
+	vision::{
+		board_detection::{BoardStabilizer, detect_board_hough},
+		postprocess,
+	},
 };
 
 pub const YOLO_INPUT_SIZE: u32 = 640;
@@ -39,6 +42,7 @@ pub struct ChessDetector {
 	piece_model: Session,
 	resizer: Resizer,
 	buffers: ImageBuffers,
+	stabilizer: BoardStabilizer,
 }
 
 impl ChessDetector {
@@ -56,11 +60,13 @@ impl ChessDetector {
 			piece_model,
 			resizer: Resizer::new(),
 			buffers: ImageBuffers::new(),
+			stabilizer: BoardStabilizer::new(0.15),
 		})
 	}
 
-	pub fn detect_board(&self, image: &RgbaImage) -> Result<Option<DetectedBoard>> {
-		Ok(detect_board_hough(&grayscale::<RgbaImage>(image)))
+	pub fn detect_board(&mut self, image: &RgbaImage) -> Result<Option<DetectedBoard>> {
+		let raw_detection = detect_board_hough(&grayscale::<RgbaImage>(image));
+		Ok(self.stabilizer.update(raw_detection))
 	}
 
 	pub fn detect_pieces(

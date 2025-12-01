@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 
 mod capture;
 mod chess;
@@ -55,12 +55,14 @@ fn main() -> Result<()> {
 	tracing::info!("Initialized in {:?}", init_start.elapsed());
 
 	let board_state = Arc::new(Mutex::new(None));
+	let board_changed = Arc::new(Condvar::new());
 
 	let analysis_proxy = event_loop.create_proxy();
-	let _analysis_service = AnalysisService::spawn(analysis_proxy, board_state.clone());
+	let _analysis_service =
+		AnalysisService::spawn(analysis_proxy, board_state.clone(), board_changed.clone());
 
 	let detection_proxy = event_loop.create_proxy();
-	let _detection_service = DetectionService::spawn(detection_proxy, board_state);
+	let _detection_service = DetectionService::spawn(detection_proxy, board_state, board_changed);
 
 	event_loop.run_app(&mut app)?;
 

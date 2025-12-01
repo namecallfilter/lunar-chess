@@ -131,17 +131,23 @@ impl EngineWrapper {
 			})
 	}
 
-	pub fn get_best_moves(&mut self) -> Result<Vec<MoveWithScore>> {
+	pub fn get_best_moves<F>(&mut self, mut on_update: F) -> Result<Vec<MoveWithScore>>
+	where
+		F: FnMut(Vec<MoveWithScore>),
+	{
 		if let (Some(book), Some(fen)) = (self.book.as_ref(), self.current_position.as_ref())
 			&& let Some(entry) = book.get_best_move_from_fen(fen.as_str())
 		{
 			let move_str = entry.move_string;
 			tracing::info!("Opening Book Hit: {} (Weight: {})", move_str, entry.weight);
 
-			return Ok(vec![MoveWithScore {
+			let moves = vec![MoveWithScore {
 				notation: MoveNotation::new(move_str),
 				score: Score::centipawns(0),
-			}]);
+			}];
+
+			on_update(moves.clone());
+			return Ok(moves);
 		}
 
 		let mut best_moves: Vec<MoveWithScore> = Vec::new();
@@ -168,14 +174,16 @@ impl EngineWrapper {
 				let notation = MoveNotation::new(first_move.to_string());
 
 				match best_moves.iter_mut().find(|m| m.notation == notation) {
-					Some(existing) if score > existing.score => {
+					Some(existing) => {
 						existing.score = score;
 					}
 					None => {
 						best_moves.push(MoveWithScore { notation, score });
 					}
-					_ => {}
 				}
+
+				best_moves.truncate(PROFILE.multi_pv);
+				on_update(best_moves.clone());
 			},
 		)?;
 

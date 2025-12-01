@@ -1,15 +1,17 @@
-use std::{cmp::Ordering, f64::consts::PI};
+use std::f64::consts::PI;
 
-use image::GrayImage;
+use image::{GrayImage, imageops::blur};
 
 use crate::model::detected::{DetectedBoard, Rect};
+
+const BELL_FLATTENING_LEVEL: f32 = 1.0;
 
 const EPSILON: f32 = 1e-6;
 
 const SOBEL_GX: [[i16; 3]; 3] = [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]];
 const SOBEL_GY: [[i16; 3]; 3] = [[-1, -2, -1], [0, 0, 0], [1, 2, 1]];
 
-const EDGE_THRESHOLD: u16 = 100;
+const EDGE_THRESHOLD: u16 = 3;
 const THETA_BINS: usize = 180;
 const NMS_WINDOW_RHO: usize = 10;
 const NMS_WINDOW_THETA: usize = 5;
@@ -18,96 +20,81 @@ const MIN_SEGMENT_FRACTION: f32 = 0.1;
 const VERTICAL_THETA_TOLERANCE: usize = 10;
 const HORIZONTAL_THETA_TOLERANCE: usize = 10;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PixelIdx(usize);
+// --- New Type Aliases & Structs ---
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PixelCount(usize);
-
-#[derive(Debug, Clone, Copy)]
-struct PixelF(f32);
+type Rho = f32;
+type Theta = usize;
+type Votes = u32;
 
 #[derive(Debug, Clone, Copy)]
-struct VoteCount(u32);
-
-#[derive(Debug, Clone, Copy)]
-struct Rho(f32);
-
-#[derive(Debug, Clone, Copy)]
-struct ThetaDeg(usize);
-
-#[derive(Debug, Clone, Copy)]
-struct GridSpacing(f32);
-
-#[derive(Debug, Clone, Copy)]
-struct GridPosition(f32);
-
-#[derive(Debug, Clone, Copy)]
-struct PixelPoint {
-	x: PixelF,
-	y: PixelF,
+struct Point {
+	x: f32,
+	y: f32,
 }
 
-impl PixelPoint {
+impl Point {
 	fn new(x: f32, y: f32) -> Self {
-		Self {
-			x: PixelF(x),
-			y: PixelF(y),
-		}
+		Self { x, y }
 	}
 }
 
 struct EdgeMap {
-	data: Vec<bool>,
-	width: PixelCount,
-	height: PixelCount,
+	data: Vec<u8>, // 0 or 1
+	width: usize,
+	height: usize,
 }
 
 impl EdgeMap {
 	fn new(width: usize, height: usize) -> Self {
 		Self {
-			data: vec![false; width * height],
-			width: PixelCount(width),
-			height: PixelCount(height),
+			data: vec![0; width * height],
+			width,
+			height,
 		}
 	}
 
 	#[inline]
-	fn set_edge(&mut self, x: PixelIdx, y: PixelIdx) {
-		if x.0 < self.width.0 && y.0 < self.height.0 {
-			self.data[y.0 * self.width.0 + x.0] = true;
+	fn idx(&self, x: usize, y: usize) -> usize {
+		y * self.width + x
+	}
+
+	#[inline]
+	fn set_edge(&mut self, x: usize, y: usize) {
+		if x < self.width && y < self.height {
+			let idx = self.idx(x, y);
+			self.data[idx] = 1;
 		}
 	}
 
 	#[inline]
-	fn is_edge(&self, x: PixelIdx, y: PixelIdx) -> bool {
-		if x.0 < self.width.0 && y.0 < self.height.0 {
-			self.data[y.0 * self.width.0 + x.0]
+	fn is_edge(&self, x: usize, y: usize) -> bool {
+		if x < self.width && y < self.height {
+			self.data[self.idx(x, y)] != 0
 		} else {
 			false
 		}
 	}
 
 	fn width(&self) -> usize {
-		self.width.0
+		self.width
 	}
 
 	fn height(&self) -> usize {
-		self.height.0
+		self.height
 	}
 }
 
 #[derive(Debug, Clone, Copy)]
 struct HoughLine {
 	rho: Rho,
-	theta: ThetaDeg,
-	votes: VoteCount,
+	theta: Theta,
+	votes: Votes,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct MeasuredSegment {
-	start: PixelPoint,
-	end: PixelPoint,
+	start: Point,
+	end: Point,
 	length_px: f32,
 }
 
@@ -121,10 +108,18 @@ struct HoughAccumulator {
 }
 
 impl HoughAccumulator {
-	fn new(image_width: usize, image_height: usize) -> Self {
+	fn new(image_width: usize, image_height: usize) -> Option<Self> {
 		let max_rho =
 			((image_width * image_width + image_height * image_height) as f64).sqrt() as f32;
 		let rho_bins = (2.0 * max_rho).ceil() as usize + 1;
+
+		// Guard against OOM
+		let approx_size =
+			(rho_bins as u64) * (THETA_BINS as u64) * std::mem::size_of::<u32>() as u64;
+		const MAX_ACC_BYTES: u64 = 300_000_000; // 300 MB
+		if approx_size > MAX_ACC_BYTES {
+			return None;
+		}
 
 		let mut sin_table = [0.0f32; THETA_BINS];
 		let mut cos_table = [0.0f32; THETA_BINS];
@@ -135,49 +130,58 @@ impl HoughAccumulator {
 			cos_table[theta_deg] = theta_rad.cos() as f32;
 		}
 
-		Self {
+		Some(Self {
 			data: vec![0u32; rho_bins * THETA_BINS],
 			rho_bins,
 			theta_bins: THETA_BINS,
 			max_rho,
 			sin_table,
 			cos_table,
-		}
+		})
 	}
 
 	#[inline]
 	fn rho_to_index(&self, rho: Rho) -> usize {
-		let idx = ((rho.0 + self.max_rho) as isize).max(0) as usize;
-		idx.min(self.rho_bins - 1)
+		// Clamp and round logic to be safe
+		let offset_rho = rho + self.max_rho;
+		let idx = offset_rho.round() as isize;
+		idx.clamp(0, (self.rho_bins as isize) - 1) as usize
 	}
 
 	#[inline]
 	fn index_to_rho(&self, index: usize) -> Rho {
-		Rho(index as f32 - self.max_rho)
+		index as f32 - self.max_rho
 	}
 
 	#[inline]
-	fn vote(&mut self, rho: Rho, theta: ThetaDeg) {
+	fn vote(&mut self, rho: Rho, theta: Theta) {
 		let rho_idx = self.rho_to_index(rho);
-		let idx = theta.0 * self.rho_bins + rho_idx;
-		if idx < self.data.len() {
-			// safe increment
-			self.data[idx] = self.data[idx].saturating_add(1);
+		if theta < self.theta_bins {
+			let idx = theta * self.rho_bins + rho_idx;
+			if idx < self.data.len() {
+				self.data[idx] = self.data[idx].saturating_add(1);
+			}
 		}
 	}
 
 	#[inline]
-	fn get_votes(&self, rho_idx: usize, theta: ThetaDeg) -> VoteCount {
-		let idx = theta.0 * self.rho_bins + rho_idx;
-		if idx < self.data.len() {
-			VoteCount(self.data[idx])
-		} else {
-			VoteCount(0)
+	fn get_votes(&self, rho_idx: usize, theta: Theta) -> Votes {
+		if theta < self.theta_bins && rho_idx < self.rho_bins {
+			let idx = theta * self.rho_bins + rho_idx;
+			if idx < self.data.len() {
+				return self.data[idx];
+			}
 		}
+		0
 	}
 
-	fn trig_for(&self, theta: ThetaDeg) -> (f32, f32) {
-		(self.cos_table[theta.0], self.sin_table[theta.0])
+	fn trig_for(&self, theta: Theta) -> (f32, f32) {
+		if theta < self.theta_bins {
+			(self.cos_table[theta], self.sin_table[theta])
+		} else {
+			debug_assert!(false, "theta out of bounds");
+			(0.0, 0.0) // Should not happen if used correctly
+		}
 	}
 }
 
@@ -185,6 +189,13 @@ fn sobel_edge_detection(image: &GrayImage, threshold: u16) -> EdgeMap {
 	let width = image.width() as usize;
 	let height = image.height() as usize;
 	let raw = image.as_raw();
+
+	// Safety check for raw indexing assumption
+	debug_assert_eq!(
+		raw.len(),
+		width * height,
+		"Image must be single channel byte format"
+	);
 
 	let mut edge_map = EdgeMap::new(width, height);
 
@@ -207,7 +218,7 @@ fn sobel_edge_detection(image: &GrayImage, threshold: u16) -> EdgeMap {
 			let magnitude = ((gx * gx + gy * gy) as f64).sqrt() as u16;
 
 			if magnitude > threshold {
-				edge_map.set_edge(PixelIdx(x), PixelIdx(y));
+				edge_map.set_edge(x, y);
 			}
 		}
 	}
@@ -221,12 +232,11 @@ fn hough_voting(edge_map: &EdgeMap, accumulator: &mut HoughAccumulator) {
 
 	for y in 0..height {
 		for x in 0..width {
-			if edge_map.is_edge(PixelIdx(x), PixelIdx(y)) {
-				for theta_deg in 0..THETA_BINS {
-					let theta = ThetaDeg(theta_deg);
+			if edge_map.is_edge(x, y) {
+				for theta in 0..THETA_BINS {
 					let (cos_t, sin_t) = accumulator.trig_for(theta);
 					let rho_val = (x as f32) * cos_t + (y as f32) * sin_t;
-					accumulator.vote(Rho(rho_val), theta);
+					accumulator.vote(rho_val, theta);
 				}
 			}
 		}
@@ -234,15 +244,14 @@ fn hough_voting(edge_map: &EdgeMap, accumulator: &mut HoughAccumulator) {
 }
 
 fn detect_peaks(
-	accumulator: &HoughAccumulator, vote_threshold: VoteCount, max_lines: usize,
+	accumulator: &HoughAccumulator, vote_threshold: Votes, max_lines: usize,
 ) -> Vec<HoughLine> {
 	let mut peaks: Vec<HoughLine> = Vec::new();
 
-	for theta_deg in 0..accumulator.theta_bins {
-		let theta = ThetaDeg(theta_deg);
+	for theta in 0..accumulator.theta_bins {
 		for rho_idx in 0..accumulator.rho_bins {
 			let votes = accumulator.get_votes(rho_idx, theta);
-			if votes.0 < vote_threshold.0 {
+			if votes < vote_threshold {
 				continue;
 			}
 
@@ -253,17 +262,31 @@ fn detect_peaks(
 						continue;
 					}
 
-					let checks = [
-						(rho_idx.wrapping_add(dr), theta_deg.wrapping_add(dt)),
-						(rho_idx.wrapping_sub(dr), theta_deg.wrapping_add(dt)),
-						(rho_idx.wrapping_add(dr), theta_deg.wrapping_sub(dt)),
-						(rho_idx.wrapping_sub(dr), theta_deg.wrapping_sub(dt)),
+					// Use checked arithmetic to avoid wrapping confusion
+					// We actually need to check the specific window neighbors, logic was:
+					// (rho +/- dr, theta +/- dt)
+					// We can iterate via signed offsets to keep it clean.
+					let check_offsets = [
+						(dr as isize, dt as isize),
+						(-(dr as isize), dt as isize),
+						(dr as isize, -(dt as isize)),
+						(-(dr as isize), -(dt as isize)),
 					];
 
-					for (r, t) in checks {
-						if r < accumulator.rho_bins && t < accumulator.theta_bins {
-							let other_votes = accumulator.get_votes(r, ThetaDeg(t));
-							if other_votes.0 > votes.0 {
+					for (r_off, t_off) in check_offsets {
+						let r_check = (rho_idx as isize) + r_off;
+						let t_check = (theta as isize) + t_off;
+
+						if r_check >= 0 && r_check < (accumulator.rho_bins as isize) {
+							// Handle theta wrapping if desired, or just bounds.
+							// Original code wrapped theta. Let's replicate wrapping for theta.
+							let t_wrapped_usize =
+								t_check.rem_euclid(accumulator.theta_bins as isize) as usize;
+							debug_assert!(t_wrapped_usize < accumulator.theta_bins);
+							let r_idx = r_check as usize;
+
+							let other_votes = accumulator.get_votes(r_idx, t_wrapped_usize);
+							if other_votes > votes {
 								is_max = false;
 								break 'nms;
 							}
@@ -282,14 +305,15 @@ fn detect_peaks(
 		}
 	}
 
-	peaks.sort_by(|a, b| b.votes.0.cmp(&a.votes.0));
+	peaks.sort_by(|a, b| b.votes.cmp(&a.votes));
 	peaks.truncate(max_lines);
 
 	peaks
 }
 
 fn measure_hough_line_segment(
-	edge_map: &EdgeMap, line: &HoughLine, gap_tol: usize,
+	edge_map: &EdgeMap, line: &HoughLine, gap_tol: usize, intersections: &mut Vec<Point>,
+	edge_samples: &mut Vec<(usize, Point)>,
 ) -> Option<MeasuredSegment> {
 	let width = edge_map.width();
 	let height = edge_map.height();
@@ -298,18 +322,19 @@ fn measure_hough_line_segment(
 		return None;
 	}
 
-	let theta_rad = (line.theta.0 as f64) * PI / 180.0;
+	intersections.clear();
+	edge_samples.clear();
+
+	let theta_rad = (line.theta as f64) * PI / 180.0;
 	let cos_t = theta_rad.cos() as f32;
 	let sin_t = theta_rad.sin() as f32;
-	let rho = line.rho.0;
-
-	let mut intersections: Vec<PixelPoint> = Vec::with_capacity(4);
+	let rho = line.rho;
 
 	// x = 0
 	if sin_t.abs() > EPSILON {
 		let y = rho / sin_t;
 		if (0.0..(height as f32)).contains(&y) {
-			intersections.push(PixelPoint::new(0.0, y));
+			intersections.push(Point::new(0.0, y));
 		}
 	}
 
@@ -318,7 +343,7 @@ fn measure_hough_line_segment(
 		let x = (width - 1) as f32;
 		let y = (rho - x * cos_t) / sin_t;
 		if (0.0..(height as f32)).contains(&y) {
-			intersections.push(PixelPoint::new(x, y));
+			intersections.push(Point::new(x, y));
 		}
 	}
 
@@ -326,7 +351,7 @@ fn measure_hough_line_segment(
 	if cos_t.abs() > EPSILON {
 		let x = rho / cos_t;
 		if (0.0..(width as f32)).contains(&x) {
-			intersections.push(PixelPoint::new(x, 0.0));
+			intersections.push(Point::new(x, 0.0));
 		}
 	}
 
@@ -335,7 +360,7 @@ fn measure_hough_line_segment(
 		let y = (height - 1) as f32;
 		let x = (rho - y * sin_t) / cos_t;
 		if (0.0..(width as f32)).contains(&x) {
-			intersections.push(PixelPoint::new(x, y));
+			intersections.push(Point::new(x, y));
 		}
 	}
 
@@ -343,22 +368,28 @@ fn measure_hough_line_segment(
 		return None;
 	}
 
-	let (p0, p1) = find_most_distant_points(&intersections);
+	let (p0, p1) = find_most_distant_points(intersections);
 
-	let (dx, dy) = (p1.x.0 - p0.x.0, p1.y.0 - p0.y.0);
-	let steps = (dx.abs().max(dy.abs()) as usize).max(1);
+	if (p0.x - p1.x).abs() < EPSILON && (p0.y - p1.y).abs() < EPSILON {
+		return None;
+	}
 
-	let mut edge_samples: Vec<(usize, PixelPoint)> = Vec::with_capacity(steps + 1);
+	let (dx, dy) = (p1.x - p0.x, p1.y - p0.y);
+	let steps = (dx.abs().max(dy.abs()).ceil() as usize).max(1);
 
 	for i in 0..=steps {
 		let t = i as f32 / steps as f32;
-		let x = p0.x.0 + dx * t;
-		let y = p0.y.0 + dy * t;
-		let xi = x.round() as usize;
-		let yi = y.round() as usize;
+		let x = p0.x + dx * t;
+		let y = p0.y + dy * t;
 
-		if xi < width && yi < height && edge_map.is_edge(PixelIdx(xi), PixelIdx(yi)) {
-			edge_samples.push((i, PixelPoint::new(x, y)));
+		// Check bounds before casting/rounding to avoid undefined behavior/panics
+		if x >= 0.0 && y >= 0.0 {
+			let xi = x.round() as usize;
+			let yi = y.round() as usize;
+
+			if xi < width && yi < height && edge_map.is_edge(xi, yi) {
+				edge_samples.push((i, Point::new(x, y)));
+			}
 		}
 	}
 
@@ -366,7 +397,7 @@ fn measure_hough_line_segment(
 		return None;
 	}
 
-	let (best_start_idx, best_end_idx) = find_longest_run_with_gaps(&edge_samples, gap_tol);
+	let (best_start_idx, best_end_idx) = find_longest_run_with_gaps(edge_samples, gap_tol)?;
 
 	if best_start_idx >= edge_samples.len() || best_end_idx >= edge_samples.len() {
 		return None;
@@ -376,12 +407,12 @@ fn measure_hough_line_segment(
 	let end = edge_samples[best_end_idx].1;
 
 	let length_px = {
-		let dx = end.x.0 - start.x.0;
-		let dy = end.y.0 - start.y.0;
+		let dx = end.x - start.x;
+		let dy = end.y - start.y;
 		(dx * dx + dy * dy).sqrt()
 	};
 
-	let potential_length = ((p1.x.0 - p0.x.0).powi(2) + (p1.y.0 - p0.y.0).powi(2)).sqrt();
+	let potential_length = ((p1.x - p0.x).powi(2) + (p1.y - p0.y).powi(2)).sqrt();
 	if length_px < potential_length * MIN_SEGMENT_FRACTION {
 		return None;
 	}
@@ -393,15 +424,15 @@ fn measure_hough_line_segment(
 	})
 }
 
-fn find_most_distant_points(points: &[PixelPoint]) -> (PixelPoint, PixelPoint) {
+fn find_most_distant_points(points: &[Point]) -> (Point, Point) {
 	debug_assert!(points.len() >= 2);
 	let mut max_dist_sq = 0.0f32;
 	let mut best_pair = (points[0], points[1]);
 
 	for i in 0..points.len() {
 		for j in (i + 1)..points.len() {
-			let dx = points[j].x.0 - points[i].x.0;
-			let dy = points[j].y.0 - points[i].y.0;
+			let dx = points[j].x - points[i].x;
+			let dy = points[j].y - points[i].y;
 			let dist_sq = dx * dx + dy * dy;
 			if dist_sq > max_dist_sq {
 				max_dist_sq = dist_sq;
@@ -413,9 +444,11 @@ fn find_most_distant_points(points: &[PixelPoint]) -> (PixelPoint, PixelPoint) {
 	best_pair
 }
 
-fn find_longest_run_with_gaps(samples: &[(usize, PixelPoint)], gap_tol: usize) -> (usize, usize) {
+fn find_longest_run_with_gaps(
+	samples: &[(usize, Point)], gap_tol: usize,
+) -> Option<(usize, usize)> {
 	if samples.is_empty() {
-		return (0, 0);
+		return None;
 	}
 
 	let mut best_start = 0usize;
@@ -448,7 +481,7 @@ fn find_longest_run_with_gaps(samples: &[(usize, PixelPoint)], gap_tol: usize) -
 		best_end = run_end;
 	}
 
-	(best_start, best_end)
+	Some((best_start, best_end))
 }
 
 fn cluster_lines_full(lines: &[HoughLine]) -> (Vec<HoughLine>, Vec<HoughLine>) {
@@ -456,7 +489,7 @@ fn cluster_lines_full(lines: &[HoughLine]) -> (Vec<HoughLine>, Vec<HoughLine>) {
 	let mut horizontal_lines: Vec<HoughLine> = Vec::new();
 
 	for line in lines {
-		let theta = line.theta.0;
+		let theta = line.theta;
 		if theta <= VERTICAL_THETA_TOLERANCE || theta >= (180 - VERTICAL_THETA_TOLERANCE) {
 			vertical_lines.push(*line);
 		} else if (90 - HORIZONTAL_THETA_TOLERANCE..=90 + HORIZONTAL_THETA_TOLERANCE)
@@ -471,9 +504,9 @@ fn cluster_lines_full(lines: &[HoughLine]) -> (Vec<HoughLine>, Vec<HoughLine>) {
 
 #[derive(Debug, Clone, Copy)]
 struct GridPattern {
-	start: GridPosition,
-	end: GridPosition,
-	spacing: GridSpacing,
+	start: f32,
+	end: f32,
+	spacing: f32,
 }
 
 fn compute_vertical_span(
@@ -482,18 +515,27 @@ fn compute_vertical_span(
 	let mut y_starts: Vec<f32> = Vec::new();
 	let mut y_ends: Vec<f32> = Vec::new();
 
-	let tolerance = (v_grid.spacing.0 * 0.05).min(8.0);
+	let tolerance = (v_grid.spacing * 0.05).min(8.0);
+
+	let mut intersections = Vec::with_capacity(4);
+	let mut edge_samples = Vec::with_capacity(1000);
 
 	for line in vertical_lines {
-		if line.rho.0 < v_grid.start.0 - tolerance || line.rho.0 > v_grid.end.0 + tolerance {
+		if line.rho < v_grid.start - tolerance || line.rho > v_grid.end + tolerance {
 			continue;
 		}
 
-		if let Some(segment) = measure_hough_line_segment(edge_map, line, SEGMENT_GAP_TOLERANCE) {
-			let y_min = segment.start.y.0.min(segment.end.y.0);
-			let y_max = segment.start.y.0.max(segment.end.y.0);
+		if let Some(segment) = measure_hough_line_segment(
+			edge_map,
+			line,
+			SEGMENT_GAP_TOLERANCE,
+			&mut intersections,
+			&mut edge_samples,
+		) {
+			let y_min = segment.start.y.min(segment.end.y);
+			let y_max = segment.start.y.max(segment.end.y);
 
-			let expected_height = v_grid.spacing.0 * 8.0;
+			let expected_height = v_grid.spacing * 8.0;
 			if segment.length_px >= expected_height * 0.4 {
 				y_starts.push(y_min);
 				y_ends.push(y_max);
@@ -505,8 +547,8 @@ fn compute_vertical_span(
 		return None;
 	}
 
-	y_starts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-	y_ends.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+	y_starts.sort_by(|a, b| a.total_cmp(b));
+	y_ends.sort_by(|a, b| a.total_cmp(b));
 
 	let median_y_start = y_starts[y_starts.len() / 2];
 	let median_y_end = y_ends[y_ends.len() / 2];
@@ -519,22 +561,31 @@ fn filter_horizontals_by_vertical_span(
 ) -> Vec<f32> {
 	let (v_y_start, v_y_end) = v_span;
 	let mut filtered_rhos: Vec<f32> = Vec::new();
-	let margin = v_grid.spacing.0 * 0.25;
+	let margin = v_grid.spacing * 0.25;
+
+	let mut intersections = Vec::with_capacity(4);
+	let mut edge_samples = Vec::with_capacity(1000);
 
 	for line in horizontal_lines {
-		if line.rho.0 < v_y_start - margin || line.rho.0 > v_y_end + margin {
+		if line.rho < v_y_start - margin || line.rho > v_y_end + margin {
 			continue;
 		}
 
-		if let Some(segment) = measure_hough_line_segment(edge_map, line, SEGMENT_GAP_TOLERANCE) {
-			let x_min = segment.start.x.0.min(segment.end.x.0);
-			let x_max = segment.start.x.0.max(segment.end.x.0);
+		if let Some(segment) = measure_hough_line_segment(
+			edge_map,
+			line,
+			SEGMENT_GAP_TOLERANCE,
+			&mut intersections,
+			&mut edge_samples,
+		) {
+			let x_min = segment.start.x.min(segment.end.x);
+			let x_max = segment.start.x.max(segment.end.x);
 
-			let overlap_start = x_min.max(v_grid.start.0);
-			let overlap_end = x_max.min(v_grid.end.0);
+			let overlap_start = x_min.max(v_grid.start);
+			let overlap_end = x_max.min(v_grid.end);
 			let overlap = (overlap_end - overlap_start).max(0.0);
 
-			let v_width = v_grid.end.0 - v_grid.start.0;
+			let v_width = v_grid.end - v_grid.start;
 			let overlap_ratio = if v_width > 0.0 {
 				overlap / v_width
 			} else {
@@ -542,7 +593,7 @@ fn filter_horizontals_by_vertical_span(
 			};
 
 			if overlap_ratio >= 0.66 {
-				filtered_rhos.push(line.rho.0);
+				filtered_rhos.push(line.rho);
 			}
 		}
 	}
@@ -550,20 +601,16 @@ fn filter_horizontals_by_vertical_span(
 	filtered_rhos
 }
 
-fn extract_rect_from_lines_with_segments(lines: &[HoughLine], edge_map: &EdgeMap) -> Rect {
+fn extract_rect_from_lines_with_segments(lines: &[HoughLine], edge_map: &EdgeMap) -> Option<Rect> {
 	if lines.is_empty() {
-		return Rect::new(0.0, 0.0, 0.0, 0.0);
+		return None;
 	}
 
 	let (vertical_lines, horizontal_lines) = cluster_lines_full(lines);
 
-	let mut vertical_rhos: Vec<f32> = vertical_lines.iter().map(|l| l.rho.0).collect();
+	let mut vertical_rhos: Vec<f32> = vertical_lines.iter().map(|l| l.rho).collect();
 
-	let v_grid = find_best_grid(&mut vertical_rhos, None);
-
-	let Some(v_grid) = v_grid else {
-		return Rect::new(0.0, 0.0, 0.0, 0.0);
-	};
+	let v_grid = find_best_grid(&mut vertical_rhos, None)?;
 
 	let v_span = compute_vertical_span(&vertical_lines, edge_map, &v_grid);
 
@@ -577,24 +624,25 @@ fn extract_rect_from_lines_with_segments(lines: &[HoughLine], edge_map: &EdgeMap
 		(filtered, spacing_from_span)
 	} else {
 		(
-			horizontal_lines.iter().map(|l| l.rho.0).collect(),
-			v_grid.spacing.0,
+			horizontal_lines.iter().map(|l| l.rho).collect(),
+			v_grid.spacing,
 		)
 	};
 
-	let h_grid = find_best_grid(&mut horizontal_rhos, Some(expected_h_spacing));
+	let h_grid = find_best_grid(&mut horizontal_rhos, Some(expected_h_spacing))?;
 
-	let Some(h_grid) = h_grid else {
-		return Rect::new(0.0, 0.0, 0.0, 0.0);
-	};
+	let spacing_diff = (v_grid.spacing - h_grid.spacing).abs();
+	if spacing_diff > v_grid.spacing * 0.1 {
+		return None;
+	}
 
-	let mut width = v_grid.end.0 - v_grid.start.0;
-	let mut height = h_grid.end.0 - h_grid.start.0;
-	let mut x = v_grid.start.0;
-	let mut y = h_grid.start.0;
+	let mut width = v_grid.end - v_grid.start;
+	let mut height = h_grid.end - h_grid.start;
+	let mut x = v_grid.start;
+	let mut y = h_grid.start;
 
-	let v_intervals = ((v_grid.end.0 - v_grid.start.0) / v_grid.spacing.0).round() as usize;
-	let h_intervals = ((h_grid.end.0 - h_grid.start.0) / h_grid.spacing.0).round() as usize;
+	let v_intervals = ((v_grid.end - v_grid.start) / v_grid.spacing).round() as usize;
+	let h_intervals = ((h_grid.end - h_grid.start) / h_grid.spacing).round() as usize;
 
 	if v_intervals == h_intervals {
 		let avg_size = (width + height) / 2.0;
@@ -607,19 +655,25 @@ fn extract_rect_from_lines_with_segments(lines: &[HoughLine], edge_map: &EdgeMap
 		y = center_y - height / 2.0;
 	}
 
-	Rect::new(x.max(0.0), y.max(0.0), width, height)
+	Some(Rect::new(x.max(0.0), y.max(0.0), width, height))
 }
 
 fn find_best_grid(rhos: &mut [f32], expected_spacing: Option<f32>) -> Option<GridPattern> {
 	if rhos.len() < 4 {
 		return None;
 	}
-	rhos.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+	rhos.sort_by(|a, b| a.total_cmp(b));
 
+	// Deduping logic
 	let mut deduped: Vec<f32> = Vec::new();
 	for &rho in rhos.iter() {
-		if deduped.is_empty() || (rho - deduped.last().unwrap()).abs() > 5.0 {
-			deduped.push(rho);
+		match deduped.last() {
+			Some(&last) => {
+				if (rho - last).abs() > 5.0 {
+					deduped.push(rho);
+				}
+			}
+			None => deduped.push(rho),
 		}
 	}
 
@@ -629,6 +683,8 @@ fn find_best_grid(rhos: &mut [f32], expected_spacing: Option<f32>) -> Option<Gri
 
 	let mut best_grid: Option<GridPattern> = None;
 	let mut max_score = -f32::INFINITY;
+
+	// Ideal chess grid is 9 lines (8 squares).
 	let target_count = 9;
 
 	for i in 0..deduped.len() {
@@ -639,10 +695,11 @@ fn find_best_grid(rhos: &mut [f32], expected_spacing: Option<f32>) -> Option<Gri
 				continue;
 			}
 
-			if let Some(target) = expected_spacing
-				&& (diff - target).abs() > target * 0.05
-			{
-				continue;
+			if let Some(target) = expected_spacing {
+				// If we know the spacing (from the other axis), be STRICT (5% tolerance)
+				if (diff - target).abs() > target * 0.05 {
+					continue;
+				}
 			}
 
 			let spacing = diff;
@@ -652,10 +709,11 @@ fn find_best_grid(rhos: &mut [f32], expected_spacing: Option<f32>) -> Option<Gri
 			if matched_count < 7 {
 				continue;
 			}
-			if matched_count > 11 {
+			if matched_count > 13 {
 				continue;
 			}
 
+			// Scoring
 			let count_diff = (matched_count as f32 - target_count as f32).abs();
 			let count_score = 20.0 - (count_diff * 5.0);
 
@@ -669,22 +727,25 @@ fn find_best_grid(rhos: &mut [f32], expected_spacing: Option<f32>) -> Option<Gri
 			let span = last_match - first_match;
 			let span_ratio = span / spacing;
 
-			if span_ratio > 10.5 {
+			if span_ratio > 8.6 {
+				continue;
+			}
+			if span_ratio < 4.0 {
 				continue;
 			}
 
 			let ideal_span = 8.0;
 			let span_diff = (span_ratio - ideal_span).abs();
-			let compactness_score = (25.0 - span_diff * 15.0).max(0.0);
+			let compactness_score = (25.0 - span_diff * 40.0).max(0.0);
 
 			let score = count_score + spacing_score + compactness_score;
 
 			if score > max_score {
 				max_score = score;
 				best_grid = Some(GridPattern {
-					start: GridPosition(first_match),
-					end: GridPosition(last_match),
-					spacing: GridSpacing(spacing),
+					start: first_match,
+					end: last_match,
+					spacing,
 				});
 			}
 		}
@@ -735,12 +796,14 @@ pub fn detect_board_hough(image: &GrayImage) -> Option<DetectedBoard> {
 		return None;
 	}
 
-	let edge_map = sobel_edge_detection(image, EDGE_THRESHOLD);
+	let blurred_image = blur(image, BELL_FLATTENING_LEVEL);
 
-	let mut accumulator = HoughAccumulator::new(width, height);
+	let edge_map = sobel_edge_detection(&blurred_image, EDGE_THRESHOLD);
+
+	let mut accumulator = HoughAccumulator::new(width, height)?;
 	hough_voting(&edge_map, &mut accumulator);
 
-	let vote_threshold = VoteCount(((width.min(height) / 10).max(20)) as u32);
+	let vote_threshold = ((width.min(height) / 10).max(20)) as u32;
 	let max_lines = 200;
 
 	let lines_raw = detect_peaks(&accumulator, vote_threshold, max_lines);
@@ -748,10 +811,7 @@ pub fn detect_board_hough(image: &GrayImage) -> Option<DetectedBoard> {
 		return None;
 	}
 
-	let rect = extract_rect_from_lines_with_segments(&lines_raw, &edge_map);
-	if rect.is_empty() {
-		return None;
-	}
+	let rect = extract_rect_from_lines_with_segments(&lines_raw, &edge_map)?;
 
 	let aspect_ratio = rect.width() / rect.height();
 	if !(0.7..=1.3).contains(&aspect_ratio) {
@@ -764,4 +824,51 @@ pub fn detect_board_hough(image: &GrayImage) -> Option<DetectedBoard> {
 	}
 
 	Some(DetectedBoard::new(rect))
+}
+
+pub struct BoardStabilizer {
+	smoothed_rect: Option<Rect>,
+	alpha: f32, // Smoothing factor (0.0 to 1.0)
+}
+
+impl BoardStabilizer {
+	pub fn new(smoothing_factor: f32) -> Self {
+		Self {
+			smoothed_rect: None,
+			alpha: smoothing_factor.clamp(0.0, 1.0),
+		}
+	}
+
+	pub fn update(&mut self, new_detection: Option<DetectedBoard>) -> Option<DetectedBoard> {
+		match (self.smoothed_rect, new_detection) {
+			// Case 1: We have a history, and we just found a new board
+			(Some(prev), Some(curr)) => {
+				// If the new board is wildly different (e.g. user dragged the window), snap to it instantly
+				if (prev.x() - curr.rect.x()).abs() > 50.0
+					|| (prev.width() - curr.rect.width()).abs() > 50.0
+				{
+					self.smoothed_rect = Some(curr.rect);
+				} else {
+					// Otherwise, smooth it (Linear Interpolation)
+					let new_x = prev.x() + (curr.rect.x() - prev.x()) * self.alpha;
+					let new_y = prev.y() + (curr.rect.y() - prev.y()) * self.alpha;
+					let new_w = prev.width() + (curr.rect.width() - prev.width()) * self.alpha;
+					let new_h = prev.height() + (curr.rect.height() - prev.height()) * self.alpha;
+
+					self.smoothed_rect = Some(Rect::new(new_x, new_y, new_w, new_h));
+				}
+			}
+			// Case 2: First time seeing a board
+			(None, Some(curr)) => {
+				self.smoothed_rect = Some(curr.rect);
+			}
+			// Case 3: Lost the board this frame?
+			(_, None) => {
+				// Clear smoothed rect when detection is lost to prevent ghosting.
+				self.smoothed_rect = None;
+			}
+		}
+
+		self.smoothed_rect.map(DetectedBoard::new)
+	}
 }

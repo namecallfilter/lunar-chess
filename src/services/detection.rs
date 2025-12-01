@@ -8,6 +8,7 @@ use std::{
 };
 
 use anyhow::Result;
+use parking_lot::Condvar;
 use winit::event_loop::EventLoopProxy;
 
 use crate::{
@@ -26,12 +27,15 @@ pub struct DetectionService {
 }
 
 impl DetectionService {
-	pub fn spawn(proxy: EventLoopProxy<UserEvent>, board_state: SharedBoardState) -> Self {
+	pub fn spawn(
+		proxy: EventLoopProxy<UserEvent>, board_state: SharedBoardState,
+		board_changed: Arc<Condvar>,
+	) -> Self {
 		let shutdown = Arc::new(AtomicBool::new(false));
 		let shutdown_clone = Arc::clone(&shutdown);
 
 		let handle = thread::spawn(move || {
-			if let Err(e) = run_detection_loop(proxy, board_state, shutdown_clone) {
+			if let Err(e) = run_detection_loop(proxy, board_state, board_changed, shutdown_clone) {
 				tracing::error!("Detection service error: {}", e);
 			}
 		});
@@ -58,7 +62,7 @@ impl Drop for DetectionService {
 
 fn run_detection_loop(
 	proxy: winit::event_loop::EventLoopProxy<UserEvent>, board_state: SharedBoardState,
-	shutdown: Arc<AtomicBool>,
+	board_changed: Arc<Condvar>, shutdown: Arc<AtomicBool>,
 ) -> Result<()> {
 	let capture = ScreenCapture::new()?;
 
@@ -183,6 +187,7 @@ fn run_detection_loop(
 		if !pieces.is_empty() && pieces.len() <= crate::vision::detector::MAX_PIECES {
 			let mut state_lock = board_state.lock();
 			*state_lock = Some(BoardState::new(board, pieces.clone()));
+			board_changed.notify_all();
 		}
 
 		if let Err(e) = proxy.send_event(UserEvent::UpdateDetections(Some(board), pieces)) {
