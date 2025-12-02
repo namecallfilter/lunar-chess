@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3](https://github.com/namecallfilter/lunar-chess/compare/v0.2.2...v0.2.3) - 2025-12-02
+
+### Other
+
+- performance and style enhancments  ([#26](https://github.com/namecallfilter/lunar-chess/pull/26))
+- *(analysis)* fix speed of engine and board analysis ([#25](https://github.com/namecallfilter/lunar-chess/pull/25))
+- massive cleanup ([#24](https://github.com/namecallfilter/lunar-chess/pull/24))
+- fix sematic check running on push ([#22](https://github.com/namecallfilter/lunar-chess/pull/22))
+
 ## [0.2.2](https://github.com/namecallfilter/lunar-chess/compare/v0.2.1...v0.2.2) - 2025-11-26
 
 ### Other
