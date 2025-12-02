@@ -37,11 +37,15 @@ pub enum UserEvent {
 	UpdateBestMoves(Vec<ChessMove>),
 }
 
+struct OverlayResources {
+	window: Rc<Window>,
+	surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
+	_context: softbuffer::Context<Rc<Window>>,
+	draw_target: DrawTarget,
+}
+
 pub struct OverlayWindow {
-	window: Option<Rc<Window>>,
-	surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
-	context: Option<softbuffer::Context<Rc<Window>>>,
-	draw_target: Option<DrawTarget>,
+	resources: Option<OverlayResources>,
 	board: Option<DetectedBoard>,
 	pieces: Vec<DetectedPiece>,
 	best_moves: Vec<ChessMove>,
@@ -53,10 +57,7 @@ pub struct OverlayWindow {
 impl OverlayWindow {
 	pub fn new() -> Self {
 		Self {
-			window: None,
-			surface: None,
-			context: None,
-			draw_target: None,
+			resources: None,
 			board: None,
 			pieces: Vec::new(),
 			best_moves: Vec::new(),
@@ -82,7 +83,8 @@ impl OverlayWindow {
 	}
 
 	fn draw(&mut self) {
-		if let (Some(dt), Some(board)) = (&mut self.draw_target, self.board) {
+		if let (Some(resources), Some(board)) = (&mut self.resources, self.board.as_ref()) {
+			let dt = &mut resources.draw_target;
 			dt.clear(SolidSource::from_unpremultiplied_argb(0, 0, 0, 0));
 
 			if CONFIG.debugging.show_grid {
@@ -120,18 +122,19 @@ impl OverlayWindow {
 					};
 
 					let arrow_color = COLOR_ARROW_BASE.with_alpha(opacity);
+					let arrow_solid = arrow_color.to_solid_source();
 
-					draw_move_arrow(dt, &board, best_move, arrow_color);
+					draw_move_arrow(dt, board, best_move, arrow_solid);
 				}
 			}
 		}
 	}
 
 	fn render(&mut self) {
-		if let (Some(surface), Some(dt)) = (&mut self.surface, &self.draw_target) {
-			let data = dt.get_data();
+		if let Some(resources) = &mut self.resources {
+			let data = resources.draw_target.get_data();
 
-			let mut buffer = match surface.buffer_mut() {
+			let mut buffer = match resources.surface.buffer_mut() {
 				Ok(b) => b,
 				Err(e) => {
 					tracing::warn!("Failed to get surface buffer: {}", e);
@@ -139,11 +142,16 @@ impl OverlayWindow {
 				}
 			};
 
-			for (i, pixel) in data.iter().enumerate() {
-				if i < buffer.len() {
-					buffer[i] = *pixel;
-				}
+			if buffer.len() != data.len() {
+				tracing::warn!(
+					"Buffer length mismatch: buffer={}, data={}",
+					buffer.len(),
+					data.len()
+				);
 			}
+
+			let len = buffer.len().min(data.len());
+			buffer[..len].copy_from_slice(&data[..len]);
 
 			if let Err(e) = buffer.present() {
 				tracing::warn!("Failed to present buffer: {}", e);
@@ -158,15 +166,15 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 			UserEvent::UpdateDetections(board, pieces) => {
 				self.update_detections(board, pieces);
 
-				if let Some(window) = &self.window {
-					window.request_redraw();
+				if let Some(resources) = &self.resources {
+					resources.window.request_redraw();
 				}
 			}
 			UserEvent::UpdateBestMoves(best_moves) => {
 				self.update_best_moves(best_moves);
 
-				if let Some(window) = &self.window {
-					window.request_redraw();
+				if let Some(resources) = &self.resources {
+					resources.window.request_redraw();
 				}
 			}
 		}
@@ -176,14 +184,14 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 		if self.last_tick.elapsed() >= UI_REDRAW_INTERVAL {
 			self.last_tick = Instant::now();
 
-			if let Some(window) = &self.window {
-				window.request_redraw();
+			if let Some(resources) = &self.resources {
+				resources.window.request_redraw();
 			}
 		}
 	}
 
 	fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-		if self.window.is_none() {
+		if self.resources.is_none() {
 			let window_attributes = Window::default_attributes()
 				.with_title("Lunar Chess Overlay")
 				.with_transparent(true)
@@ -266,14 +274,17 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 				return;
 			}
 
-			self.draw_target = Some(DrawTarget::new(
+			let draw_target = DrawTarget::new(
 				self.screen_size.width as i32,
 				self.screen_size.height as i32,
-			));
+			);
 
-			self.surface = Some(surface);
-			self.context = Some(context);
-			self.window = Some(window.clone());
+			self.resources = Some(OverlayResources {
+				window: window.clone(),
+				surface,
+				_context: context,
+				draw_target,
+			});
 
 			window.request_redraw();
 		}
@@ -291,20 +302,20 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 				self.render();
 			}
 			WindowEvent::Resized(size) => {
-				if let (Some(surface), Some(width), Some(height)) = (
-					&mut self.surface,
-					NonZeroU32::new(size.width),
-					NonZeroU32::new(size.height),
-				) {
-					surface.resize(width, height).unwrap_or_else(|e| {
-						tracing::warn!("Failed to resize surface: {}", e);
-					});
-				}
-
-				self.draw_target = Some(DrawTarget::new(size.width as i32, size.height as i32));
-
-				if let Some(window) = &self.window {
-					window.request_redraw();
+				if let Some(resources) = &mut self.resources
+					&& let (Some(width), Some(height)) =
+						(NonZeroU32::new(size.width), NonZeroU32::new(size.height))
+				{
+					match resources.surface.resize(width, height) {
+						Ok(_) => {
+							resources.draw_target =
+								DrawTarget::new(size.width as i32, size.height as i32);
+							resources.window.request_redraw();
+						}
+						Err(e) => {
+							tracing::warn!("Failed to resize surface: {}", e);
+						}
+					}
 				}
 			}
 			_ => {}
