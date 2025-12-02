@@ -8,7 +8,7 @@ license = "MIT"
 [dependencies]
 anyhow = "1.0.100"
 config = { version = "0.15", features = ["toml"] }
-fast_image_resize = { version = "5.3", features = ["image", "rayon"] }
+fast_image_resize = { version = "5.4", features = ["image", "rayon"] }
 font-kit = "0.14.3"
 image = "0.25.9"
 ndarray = "0.16.1"
