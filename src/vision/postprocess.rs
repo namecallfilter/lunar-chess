@@ -71,9 +71,14 @@ fn nms_pieces(mut pieces: Vec<DetectedPiece>, iou_threshold: f32) -> Vec<Detecte
 	}
 
 	pieces.sort_unstable_by(|a, b| {
-		b.confidence
-			.partial_cmp(&a.confidence)
-			.unwrap_or(std::cmp::Ordering::Equal)
+		let ca = a.confidence.value();
+		let cb = b.confidence.value();
+		match (ca.is_nan(), cb.is_nan()) {
+			(true, true) => std::cmp::Ordering::Equal,
+			(true, false) => std::cmp::Ordering::Greater,
+			(false, true) => std::cmp::Ordering::Less,
+			(false, false) => cb.partial_cmp(&ca).unwrap(),
+		}
 	});
 
 	let mut keep = Vec::with_capacity(pieces.len());

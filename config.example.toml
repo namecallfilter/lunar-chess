@@ -1,14 +1,20 @@
 [engine]
 path = "" # Path to the exe of the engine
 args = [] # Any args you give the engine like '--weights='
+book = "" # Optional: Path to a .bin polyglot opening book
 profile = "default" # The profile to use from [profiles.<name>]
 
 # Profiles to change the UCI options and go
 [profiles.default]
-threads = 8
-hash = 8192
-multi_pv = 6
-depth = 5
+# UCI options are passed directly to the engine via "setoption"
+# See https://backscattering.de/chess/uci/#engine-option for standard options
+uci.Threads = "8"
+uci.Hash = "8192"
+uci.MultiPV = "6"
+
+# Go commands control the search parameters
+# See https://backscattering.de/chess/uci/#gui-go for available commands
+go.depth = 5
 
 [detection]
 path = "" # Path to the ONNX file that detect the pieces

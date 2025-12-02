@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::Result;
-use parking_lot::Condvar;
+use parking_lot::{Condvar, Mutex};
 use winit::event_loop::EventLoopProxy;
 
 use crate::{
@@ -24,6 +24,8 @@ const BOARD_DETECTION_INTERVAL_FRAMES: usize = 30;
 pub struct DetectionService {
 	thread_handle: Option<JoinHandle<()>>,
 	shutdown: Arc<AtomicBool>,
+	wake: Arc<Condvar>,
+	wake_lock: Arc<Mutex<bool>>,
 }
 
 impl DetectionService {
@@ -34,20 +36,41 @@ impl DetectionService {
 		let shutdown = Arc::new(AtomicBool::new(false));
 		let shutdown_clone = Arc::clone(&shutdown);
 
-		let handle = thread::spawn(move || {
-			if let Err(e) = run_detection_loop(proxy, board_state, board_changed, shutdown_clone) {
-				tracing::error!("Detection service error: {}", e);
-			}
-		});
+		let wake = Arc::new(Condvar::new());
+		let wake_lock = Arc::new(Mutex::new(false));
+
+		let wake_clone = Arc::clone(&wake);
+		let wake_lock_clone = Arc::clone(&wake_lock);
+
+		let handle = thread::Builder::new()
+			.name("detection-service".into())
+			.spawn(move || {
+				if let Err(e) = run_detection_loop(
+					proxy,
+					board_state,
+					board_changed,
+					shutdown_clone,
+					wake_clone,
+					wake_lock_clone,
+				) {
+					tracing::error!("Detection service error: {}", e);
+				}
+			})
+			.expect("Failed to spawn detection thread");
 
 		Self {
 			thread_handle: Some(handle),
 			shutdown,
+			wake,
+			wake_lock,
 		}
 	}
 
 	fn shutdown(&self) {
-		self.shutdown.store(true, Ordering::SeqCst);
+		self.shutdown.store(true, Ordering::Release);
+		let mut lock = self.wake_lock.lock();
+		*lock = true;
+		self.wake.notify_all();
 	}
 }
 
@@ -62,7 +85,8 @@ impl Drop for DetectionService {
 
 fn run_detection_loop(
 	proxy: winit::event_loop::EventLoopProxy<UserEvent>, board_state: SharedBoardState,
-	board_changed: Arc<Condvar>, shutdown: Arc<AtomicBool>,
+	board_changed: Arc<Condvar>, shutdown: Arc<AtomicBool>, wake: Arc<Condvar>,
+	wake_lock: Arc<Mutex<bool>>,
 ) -> Result<()> {
 	let capture = ScreenCapture::new()?;
 
@@ -78,14 +102,17 @@ fn run_detection_loop(
 	let mut frames_since_board_detection = BOARD_DETECTION_INTERVAL_FRAMES;
 	let mut was_at_start_pos = false;
 
-	while !shutdown.load(Ordering::SeqCst) {
+	while !shutdown.load(Ordering::Acquire) {
 		let loop_start = Instant::now();
 
 		let image = match capture.capture() {
 			Ok(img) => img,
 			Err(e) => {
 				tracing::error!("Screen capture failed: {}", e);
-				thread::sleep(DETECTION_INTERVAL);
+				{
+					let mut lock = wake_lock.lock();
+					wake.wait_for(&mut lock, DETECTION_INTERVAL);
+				}
 				continue;
 			}
 		};
@@ -131,7 +158,10 @@ fn run_detection_loop(
 					.send_event(UserEvent::UpdateDetections(None, Vec::new()))
 					.ok();
 
-				thread::sleep(DETECTION_INTERVAL);
+				{
+					let mut lock = wake_lock.lock();
+					wake.wait_for(&mut lock, DETECTION_INTERVAL);
+				}
 				continue;
 			}
 		};
@@ -153,8 +183,7 @@ fn run_detection_loop(
 
 		let mut board = board;
 		if !pieces.is_empty() && detected_orientation.is_none() {
-			let temp_state = BoardState::new(board, pieces.clone());
-			let orientation = temp_state.detect_orientation();
+			let orientation = BoardState::calculate_orientation(&board, &pieces);
 
 			detected_orientation = Some(orientation);
 
@@ -165,22 +194,22 @@ fn run_detection_loop(
 
 		board.orientation = detected_orientation.unwrap_or(BoardOrientation::Unknown);
 
-		if !pieces.is_empty() && board.orientation != BoardOrientation::Unknown {
-			let temp_state = BoardState::new(board, pieces.clone());
-			if let Ok(fen) = temp_state.to_fen() {
-				let fen_str = fen.as_str();
-				let is_start = fen_str.starts_with("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR")
-					|| fen_str.starts_with("RNBKQBNR/PPPPPPPP/8/8/8/8/pppppppp/rnbkqbnr");
+		if !pieces.is_empty()
+			&& board.orientation != BoardOrientation::Unknown
+			&& let Ok(fen) = BoardState::calculate_fen(&board, &pieces)
+		{
+			let fen_str = fen.as_str();
+			let is_start = fen_str.starts_with("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR")
+				|| fen_str.starts_with("RNBKQBNR/PPPPPPPP/8/8/8/8/pppppppp/rnbkqbnr");
 
-				if is_start {
-					if !was_at_start_pos {
-						tracing::info!("Starting position detected, resetting orientation");
-						detected_orientation = None;
-						was_at_start_pos = true;
-					}
-				} else {
-					was_at_start_pos = false;
+			if is_start {
+				if !was_at_start_pos {
+					tracing::info!("Starting position detected, resetting orientation");
+					detected_orientation = None;
+					was_at_start_pos = true;
 				}
+			} else {
+				was_at_start_pos = false;
 			}
 		}
 
@@ -197,7 +226,8 @@ fn run_detection_loop(
 		let total_time = loop_start.elapsed();
 
 		if total_time < DETECTION_INTERVAL {
-			thread::sleep(DETECTION_INTERVAL - total_time);
+			let mut lock = wake_lock.lock();
+			wake.wait_for(&mut lock, DETECTION_INTERVAL - total_time);
 		}
 	}
 

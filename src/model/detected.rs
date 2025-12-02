@@ -13,8 +13,6 @@ pub struct Rect {
 	height: f32,
 }
 
-const EPSILON: f32 = 1e-6;
-
 impl Rect {
 	pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
 		Self {
@@ -48,11 +46,6 @@ impl Rect {
 	#[inline]
 	pub fn center(&self) -> Point2D {
 		Point2D::new(self.x + self.width / 2.0, self.y + self.height / 2.0)
-	}
-
-	#[inline]
-	pub fn is_empty(&self) -> bool {
-		self.width <= EPSILON || self.height <= EPSILON
 	}
 }
 
@@ -111,6 +104,23 @@ impl DetectedBoard {
 	#[inline]
 	pub fn square_center(&self, square: &Square) -> Point2D {
 		self.cell_center(square.file.index(), square.rank.index())
+	}
+
+	pub fn get_square_for_piece(&self, piece: &DetectedPiece) -> Option<Square> {
+		let cell_size = self.cell_size();
+		let piece_center = piece.center();
+
+		let rel_x = piece_center.x - self.x();
+		let rel_y = piece_center.y - self.y();
+
+		let file = (rel_x / cell_size.width).floor() as i32;
+		let rank = (rel_y / cell_size.height).floor() as i32;
+
+		if (0..BOARD_SIZE as i32).contains(&file) && (0..BOARD_SIZE as i32).contains(&rank) {
+			Square::from_indices(file as u8, rank as u8)
+		} else {
+			None
+		}
 	}
 
 	#[inline]
@@ -187,13 +197,19 @@ impl BoardState {
 		Self { board, pieces }
 	}
 
-	pub fn detect_orientation(&self) -> BoardOrientation {
+	pub fn to_fen(&self) -> Result<Fen, BoardToFenError> {
+		Self::calculate_fen(&self.board, &self.pieces)
+	}
+
+	pub fn calculate_orientation(
+		board: &DetectedBoard, pieces: &[DetectedPiece],
+	) -> BoardOrientation {
 		let mut white_bottom = 0;
 		let mut white_top = 0;
 
-		let mid_y = self.board.y() + self.board.height() / 2.0;
+		let mid_y = board.y() + board.height() / 2.0;
 
-		for piece in &self.pieces {
+		for piece in pieces {
 			if piece.piece_type.is_white() {
 				let piece_center = piece.center();
 
@@ -205,16 +221,21 @@ impl BoardState {
 			}
 		}
 
-		if white_bottom > white_top {
+		if white_top == 0 && white_bottom == 0 {
+			BoardOrientation::Unknown
+		} else if white_bottom > white_top {
 			BoardOrientation::WhiteAtBottom
-		} else {
+		} else if white_top > white_bottom {
 			BoardOrientation::WhiteAtTop
+		} else {
+			BoardOrientation::Unknown
 		}
 	}
 
-	pub fn to_fen(&self) -> Result<Fen, BoardToFenError> {
-		let player_color = self
-			.board
+	pub fn calculate_fen(
+		board: &DetectedBoard, pieces: &[DetectedPiece],
+	) -> Result<Fen, BoardToFenError> {
+		let player_color = board
 			.orientation
 			.to_player_color()
 			.ok_or(BoardToFenError::UnknownOrientation)?;
@@ -222,8 +243,8 @@ impl BoardState {
 		let mut chess_board: [[Option<PieceType>; BOARD_SIZE]; BOARD_SIZE] =
 			[[None; BOARD_SIZE]; BOARD_SIZE];
 
-		for piece in &self.pieces {
-			if let Some(square) = self.piece_to_square(piece) {
+		for piece in pieces {
+			if let Some(square) = board.get_square_for_piece(piece) {
 				let file = square.file.index() as usize;
 				let rank = square.rank.index() as usize;
 
@@ -246,11 +267,11 @@ impl BoardState {
 		let has_white_king = chess_board
 			.iter()
 			.flatten()
-			.any(|p| matches!(p, Some(PieceType::WhiteKing)));
+			.any(|p| matches!(p, Some(PieceType::WHITE_KING)));
 		let has_black_king = chess_board
 			.iter()
 			.flatten()
-			.any(|p| matches!(p, Some(PieceType::BlackKing)));
+			.any(|p| matches!(p, Some(PieceType::BLACK_KING)));
 
 		if !has_white_king {
 			return Err(BoardToFenError::MissingKing { color: "white" });
@@ -309,43 +330,30 @@ impl BoardState {
 	fn infer_castling_rights(board: &[[Option<PieceType>; BOARD_SIZE]; BOARD_SIZE]) -> String {
 		let mut castling = String::new();
 
-		if matches!(board[7][4], Some(PieceType::WhiteKing)) {
-			if matches!(board[7][7], Some(PieceType::WhiteRook)) {
+		// Board is normalized so white is at the bottom (rank 7) and black at the top (rank 0)
+		// White back rank: row 7
+		// Black back rank: row 0
+
+		if matches!(board[7][4], Some(PieceType::WHITE_KING)) {
+			if matches!(board[7][7], Some(PieceType::WHITE_ROOK)) {
 				castling.push('K');
 			}
 
-			if matches!(board[7][0], Some(PieceType::WhiteRook)) {
+			if matches!(board[7][0], Some(PieceType::WHITE_ROOK)) {
 				castling.push('Q');
 			}
 		}
 
-		if matches!(board[0][4], Some(PieceType::BlackKing)) {
-			if matches!(board[0][7], Some(PieceType::BlackRook)) {
+		if matches!(board[0][4], Some(PieceType::BLACK_KING)) {
+			if matches!(board[0][7], Some(PieceType::BLACK_ROOK)) {
 				castling.push('k');
 			}
 
-			if matches!(board[0][0], Some(PieceType::BlackRook)) {
+			if matches!(board[0][0], Some(PieceType::BLACK_ROOK)) {
 				castling.push('q');
 			}
 		}
 
 		castling
-	}
-
-	pub fn piece_to_square(&self, piece: &DetectedPiece) -> Option<Square> {
-		let cell_size = self.board.cell_size();
-		let piece_center = piece.center();
-
-		let rel_x = piece_center.x - self.board.x();
-		let rel_y = piece_center.y - self.board.y();
-
-		let file = (rel_x / cell_size.width) as i32;
-		let rank = (rel_y / cell_size.height) as i32;
-
-		if (0..BOARD_SIZE as i32).contains(&file) && (0..BOARD_SIZE as i32).contains(&rank) {
-			Square::from_indices(file as u8, rank as u8)
-		} else {
-			None
-		}
 	}
 }
