@@ -49,7 +49,7 @@ pub struct MoveWithScore {
 
 pub struct EngineWrapper {
 	engine: ruci::Engine<BufReader<ChildStdout>, ChildStdin>,
-	_process: std::process::Child,
+	process: std::process::Child,
 	book: Option<PolyglotBook>,
 	current_position: Option<Fen>,
 }
@@ -94,7 +94,7 @@ impl EngineWrapper {
 
 		Ok(Self {
 			engine,
-			_process: process,
+			process,
 			book,
 			current_position: None,
 		})
@@ -109,20 +109,19 @@ impl EngineWrapper {
 				reason: format!("Parse error: {:?}", e),
 			})?;
 
-		self.current_position = Some(fen.clone());
-
 		self.engine
 			.send(&ruci::Position::Fen {
 				fen: Cow::Owned(parsed_fen),
 				moves: Cow::Borrowed(&[]),
 			})
-			.map_err(|e| {
-				AnalysisError::InvalidPosition {
-					fen: fen_str.to_string(),
-					reason: e.to_string(),
-				}
-				.into()
-			})
+			.map_err(|e| AnalysisError::InvalidPosition {
+				fen: fen_str.to_string(),
+				reason: e.to_string(),
+			})?;
+
+		self.current_position = Some(fen.clone());
+
+		Ok(())
 	}
 
 	pub fn get_best_moves<F>(&mut self, mut on_update: F) -> Result<Vec<MoveWithScore>>
@@ -144,7 +143,13 @@ impl EngineWrapper {
 			return Ok(moves);
 		}
 
-		let mut best_moves: Vec<MoveWithScore> = Vec::new();
+		let multi_pv = PROFILE
+			.uci
+			.get("MultiPV")
+			.and_then(|v| v.parse::<usize>().ok())
+			.unwrap_or(1);
+
+		let mut best_moves: Vec<MoveWithScore> = Vec::with_capacity(multi_pv + 1);
 
 		let go_params = if let Some(config) = &PROFILE.go {
 			ruci::Go {
@@ -176,12 +181,6 @@ impl EngineWrapper {
 			ruci::Go::default()
 		};
 
-		let multi_pv = PROFILE
-			.uci
-			.get("MultiPV")
-			.and_then(|v| v.parse::<usize>().ok())
-			.unwrap_or(1);
-
 		self.engine.go(&go_params, |info| {
 			let Some(score_with_bound) = info.score else {
 				return;
@@ -198,19 +197,43 @@ impl EngineWrapper {
 
 			let notation = MoveNotation::new(first_move.to_string());
 
-			match best_moves.iter_mut().find(|m| m.notation == notation) {
-				Some(existing) => {
-					existing.score = score;
-				}
-				None => {
-					best_moves.push(MoveWithScore { notation, score });
-				}
+			if let Some(existing) = best_moves.iter_mut().find(|m| m.notation == notation) {
+				existing.score = score;
+			} else {
+				best_moves.push(MoveWithScore { notation, score });
 			}
 
+			best_moves.sort_by(|a, b| b.score.cmp(&a.score));
+
 			best_moves.truncate(multi_pv);
-			on_update(&best_moves);
+
+			let has_mate = best_moves
+				.iter()
+				.any(|m| matches!(m.score, Score::MateIn(n) if n > 0));
+
+			if has_mate {
+				let mating_moves: Vec<_> = best_moves
+					.iter()
+					.filter(|m| matches!(m.score, Score::MateIn(n) if n > 0))
+					.cloned()
+					.collect();
+
+				on_update(&mating_moves);
+			} else {
+				on_update(&best_moves);
+			}
 		})?;
 
 		Ok(best_moves)
+	}
+}
+
+impl Drop for EngineWrapper {
+	fn drop(&mut self) {
+		let _ = self.engine.send(ruci::Quit {});
+
+		if self.process.wait().is_err() {
+			let _ = self.process.kill();
+		}
 	}
 }
