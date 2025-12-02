@@ -49,6 +49,7 @@ pub struct MoveWithScore {
 
 pub struct EngineWrapper {
 	engine: ruci::Engine<BufReader<ChildStdout>, ChildStdin>,
+	_process: std::process::Child,
 	book: Option<PolyglotBook>,
 	current_position: Option<Fen>,
 }
@@ -84,23 +85,16 @@ impl EngineWrapper {
 		engine.use_uci(|_| {})?;
 		engine.is_ready()?;
 
-		engine.send(ruci::SetOption {
-			name: "Threads".into(),
-			value: Some(PROFILE.threads.to_string().into()),
-		})?;
-
-		engine.send(ruci::SetOption {
-			name: "Hash".into(),
-			value: Some(PROFILE.hash.to_string().into()),
-		})?;
-
-		engine.send(ruci::SetOption {
-			name: "MultiPV".into(),
-			value: Some(PROFILE.multi_pv.to_string().into()),
-		})?;
+		for (name, value) in &PROFILE.uci {
+			engine.send(ruci::SetOption {
+				name: name.clone().into(),
+				value: Some(value.clone().into()),
+			})?;
+		}
 
 		Ok(Self {
 			engine,
+			_process: process,
 			book,
 			current_position: None,
 		})
@@ -133,7 +127,7 @@ impl EngineWrapper {
 
 	pub fn get_best_moves<F>(&mut self, mut on_update: F) -> Result<Vec<MoveWithScore>>
 	where
-		F: FnMut(Vec<MoveWithScore>),
+		F: FnMut(&[MoveWithScore]),
 	{
 		if let (Some(book), Some(fen)) = (self.book.as_ref(), self.current_position.as_ref())
 			&& let Some(entry) = book.get_best_move_from_fen(fen.as_str())
@@ -146,48 +140,76 @@ impl EngineWrapper {
 				score: Score::centipawns(0),
 			}];
 
-			on_update(moves.clone());
+			on_update(&moves);
 			return Ok(moves);
 		}
 
 		let mut best_moves: Vec<MoveWithScore> = Vec::new();
 
-		self.engine.go(
-			&ruci::Go {
-				depth: Some(PROFILE.depth),
-				..Default::default()
-			},
-			|info| {
-				let Some(score_with_bound) = info.score else {
-					return;
-				};
-
-				let Some(first_move) = info.pv.first() else {
-					return;
-				};
-
-				let score = match score_with_bound.kind {
-					ruci::Score::Centipawns(cp) => Score::centipawns(cp as i32),
-					ruci::Score::MateIn(moves) => Score::mate_in(moves as i8),
-				};
-
-				let notation = MoveNotation::new(first_move.to_string());
-
-				match best_moves.iter_mut().find(|m| m.notation == notation) {
-					Some(existing) => {
-						existing.score = score;
+		let go_params = if let Some(config) = &PROFILE.go {
+			ruci::Go {
+				search_moves: if let Some(moves) = &config.search_moves {
+					let uci_moves: Result<Vec<_>, _> = moves.iter().map(|m| m.parse()).collect();
+					match uci_moves {
+						Ok(m) => Cow::Owned(m),
+						Err(e) => {
+							tracing::warn!("Failed to parse search moves: {}", e);
+							Cow::Borrowed(&[])
+						}
 					}
-					None => {
-						best_moves.push(MoveWithScore { notation, score });
-					}
+				} else {
+					Cow::Borrowed(&[])
+				},
+				ponder: config.ponder.unwrap_or(false),
+				w_time: config.wtime,
+				b_time: config.btime,
+				w_inc: config.winc.and_then(std::num::NonZeroUsize::new),
+				b_inc: config.binc.and_then(std::num::NonZeroUsize::new),
+				moves_to_go: config.movestogo.and_then(std::num::NonZeroUsize::new),
+				depth: config.depth,
+				nodes: config.nodes,
+				mate: config.mate,
+				move_time: config.movetime,
+				infinite: config.infinite.unwrap_or(false),
+			}
+		} else {
+			ruci::Go::default()
+		};
+
+		let multi_pv = PROFILE
+			.uci
+			.get("MultiPV")
+			.and_then(|v| v.parse::<usize>().ok())
+			.unwrap_or(1);
+
+		self.engine.go(&go_params, |info| {
+			let Some(score_with_bound) = info.score else {
+				return;
+			};
+
+			let Some(first_move) = info.pv.first() else {
+				return;
+			};
+
+			let score = match score_with_bound.kind {
+				ruci::Score::Centipawns(cp) => Score::centipawns(cp as i32),
+				ruci::Score::MateIn(moves) => Score::mate_in(moves as i8),
+			};
+
+			let notation = MoveNotation::new(first_move.to_string());
+
+			match best_moves.iter_mut().find(|m| m.notation == notation) {
+				Some(existing) => {
+					existing.score = score;
 				}
+				None => {
+					best_moves.push(MoveWithScore { notation, score });
+				}
+			}
 
-				best_moves.truncate(PROFILE.multi_pv);
-				on_update(best_moves.clone());
-			},
-		)?;
-
-		best_moves.truncate(PROFILE.multi_pv);
+			best_moves.truncate(multi_pv);
+			on_update(&best_moves);
+		})?;
 
 		Ok(best_moves)
 	}

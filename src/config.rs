@@ -30,10 +30,26 @@ pub struct EngineConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EngineProfile {
-	pub threads: usize,
-	pub hash: usize,
-	pub multi_pv: usize,
-	pub depth: usize,
+	#[serde(default)]
+	pub uci: HashMap<String, String>,
+	#[serde(default)]
+	pub go: Option<GoConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GoConfig {
+	pub search_moves: Option<Vec<String>>,
+	pub ponder: Option<bool>,
+	pub wtime: Option<usize>,
+	pub btime: Option<usize>,
+	pub winc: Option<usize>,
+	pub binc: Option<usize>,
+	pub movestogo: Option<usize>,
+	pub depth: Option<usize>,
+	pub nodes: Option<usize>,
+	pub mate: Option<usize>,
+	pub movetime: Option<usize>,
+	pub infinite: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -47,10 +63,11 @@ pub struct DebuggingConfig {
 pub static CONFIG: Lazy<Config> =
 	Lazy::new(|| Config::load().expect("Failed to load configuration"));
 
-pub static PROFILE: Lazy<&EngineProfile> = Lazy::new(|| {
+pub static PROFILE: Lazy<EngineProfile> = Lazy::new(|| {
 	CONFIG
 		.profiles
 		.get(&CONFIG.engine.profile)
+		.cloned()
 		.expect("Profile not found in config")
 });
 
