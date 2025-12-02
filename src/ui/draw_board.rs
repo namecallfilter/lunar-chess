@@ -113,7 +113,7 @@ pub fn draw_chess_grid(dt: &mut DrawTarget, rect: &Rect) {
 }
 
 pub fn draw_move_arrow(
-	dt: &mut DrawTarget, board: &DetectedBoard, chess_move: &ChessMove, color: Color,
+	dt: &mut DrawTarget, board: &DetectedBoard, chess_move: &ChessMove, color: SolidSource,
 ) {
 	let from_file = chess_move.from.file.index();
 	let from_rank = chess_move.from.rank.index();
@@ -142,7 +142,7 @@ pub fn draw_move_arrow(
 }
 
 fn draw_straight_arrow(
-	dt: &mut DrawTarget, from: Point2D, to: Point2D, style: &ArrowStyle, color: Color,
+	dt: &mut DrawTarget, from: Point2D, to: Point2D, style: &ArrowStyle, color: SolidSource,
 ) {
 	let dx = to.x - from.x;
 	let dy = to.y - from.y;
@@ -187,11 +187,7 @@ fn draw_straight_arrow(
 	pb.close();
 
 	let path = pb.finish();
-	dt.fill(
-		&path,
-		&Source::Solid(color.to_solid_source()),
-		&DrawOptions::new(),
-	);
+	dt.fill(&path, &Source::Solid(color), &DrawOptions::new());
 
 	let mut pb = PathBuilder::new();
 	pb.move_to(to.x, to.y);
@@ -206,15 +202,12 @@ fn draw_straight_arrow(
 	pb.close();
 
 	let path = pb.finish();
-	dt.fill(
-		&path,
-		&Source::Solid(color.to_solid_source()),
-		&DrawOptions::new(),
-	);
+	dt.fill(&path, &Source::Solid(color), &DrawOptions::new());
 }
 
 fn draw_knight_arrow(
-	dt: &mut DrawTarget, from: Point2D, mid: Point2D, to: Point2D, style: &ArrowStyle, color: Color,
+	dt: &mut DrawTarget, from: Point2D, mid: Point2D, to: Point2D, style: &ArrowStyle,
+	color: SolidSource,
 ) {
 	let dx1 = mid.x - from.x;
 	let dy1 = mid.y - from.y;
@@ -319,11 +312,7 @@ fn draw_knight_arrow(
 	pb.close();
 
 	let path = pb.finish();
-	dt.fill(
-		&path,
-		&Source::Solid(color.to_solid_source()),
-		&DrawOptions::new(),
-	);
+	dt.fill(&path, &Source::Solid(color), &DrawOptions::new());
 
 	let mut pb = PathBuilder::new();
 	pb.move_to(to.x, to.y);
@@ -338,17 +327,18 @@ fn draw_knight_arrow(
 	pb.close();
 
 	let path = pb.finish();
-	dt.fill(
-		&path,
-		&Source::Solid(color.to_solid_source()),
-		&DrawOptions::new(),
-	);
+	dt.fill(&path, &Source::Solid(color), &DrawOptions::new());
 }
 
 pub fn draw_piece_labels(dt: &mut DrawTarget, pieces: &[DetectedPiece]) {
 	LABEL_FONT.with(|font_cell| {
 		let font_ref = font_cell.borrow();
 		let Some(font) = font_ref.as_ref() else {
+			static WARNED: std::sync::atomic::AtomicBool =
+				std::sync::atomic::AtomicBool::new(false);
+			if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+				tracing::debug!("System font for labels not found, skipping label rendering");
+			}
 			return;
 		};
 

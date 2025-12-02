@@ -23,6 +23,7 @@ const ENGINE_INIT_RETRY_DELAY: Duration = Duration::from_secs(5);
 pub struct AnalysisService {
 	thread_handle: Option<JoinHandle<()>>,
 	shutdown: Arc<AtomicBool>,
+	board_changed: Arc<Condvar>,
 }
 
 impl AnalysisService {
@@ -32,19 +33,25 @@ impl AnalysisService {
 	) -> Self {
 		let shutdown = Arc::new(AtomicBool::new(false));
 		let shutdown_clone = Arc::clone(&shutdown);
+		let board_changed_clone = Arc::clone(&board_changed);
 
-		let handle = thread::spawn(move || {
-			run_analysis_loop(proxy, board_state, board_changed, shutdown_clone);
-		});
+		let handle = thread::Builder::new()
+			.name("analysis-service".into())
+			.spawn(move || {
+				run_analysis_loop(proxy, board_state, board_changed, shutdown_clone);
+			})
+			.expect("Failed to spawn analysis thread");
 
 		Self {
 			thread_handle: Some(handle),
 			shutdown,
+			board_changed: board_changed_clone,
 		}
 	}
 
 	fn shutdown(&self) {
-		self.shutdown.store(true, Ordering::SeqCst);
+		self.shutdown.store(true, Ordering::Release);
+		self.board_changed.notify_all();
 	}
 }
 
@@ -63,21 +70,21 @@ fn run_analysis_loop(
 ) {
 	let mut last_analyzed_fen: Option<Fen> = None;
 
-	while !shutdown.load(Ordering::SeqCst) {
+	while !shutdown.load(Ordering::Acquire) {
 		let engine_result = EngineWrapper::new();
 
 		match engine_result {
 			Ok(mut engine) => {
 				tracing::info!("Analysis engine ready");
 
-				while !shutdown.load(Ordering::SeqCst) {
+				while !shutdown.load(Ordering::Acquire) {
 					let current_position = {
 						let mut lock = board_state.lock();
 						let _ = board_changed.wait_for(&mut lock, SHUTDOWN_CHECK_INTERVAL);
 						lock.clone()
 					};
 
-					if shutdown.load(Ordering::SeqCst) {
+					if shutdown.load(Ordering::Acquire) {
 						break;
 					}
 
@@ -145,7 +152,7 @@ fn run_analysis_loop(
 					}
 				}
 
-				if !shutdown.load(Ordering::SeqCst) {
+				if !shutdown.load(Ordering::Acquire) {
 					tracing::warn!("Engine crashed, restarting...");
 
 					thread::sleep(ENGINE_RESTART_DELAY);

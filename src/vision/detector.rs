@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use fast_image_resize::{PixelType, Resizer, images::Image};
-use image::{RgbaImage, imageops::grayscale};
+use image::RgbaImage;
 use ndarray::Array4;
 use ort::{
 	execution_providers::CUDAExecutionProvider,
@@ -65,31 +65,42 @@ impl ChessDetector {
 	}
 
 	pub fn detect_board(&mut self, image: &RgbaImage) -> Result<Option<DetectedBoard>> {
-		let raw_detection = detect_board_hough(&grayscale::<RgbaImage>(image));
+		let raw_detection = detect_board_hough(image);
+
 		Ok(self.stabilizer.update(raw_detection))
 	}
 
 	pub fn detect_pieces(
 		&mut self, image: &RgbaImage, board: &DetectedBoard,
 	) -> Result<Vec<DetectedPiece>> {
-		if board.x() < 0.0 || board.y() < 0.0 || board.rect.is_empty() {
+		let img_w = image.width();
+		let img_h = image.height();
+
+		let x = board.x().max(0.0).floor() as u32;
+		let y = board.y().max(0.0).floor() as u32;
+
+		if x >= img_w || y >= img_h {
+			return Ok(Vec::new());
+		}
+
+		let remaining_w = (img_w - x) as f32;
+		let remaining_h = (img_h - y) as f32;
+
+		let w = board.width().min(remaining_w).floor() as u32;
+		let h = board.height().min(remaining_h).floor() as u32;
+
+		if w == 0 || h == 0 {
 			tracing::debug!(
-				"Invalid board bounds: x={}, y={}, w={}, h={}",
-				board.x(),
-				board.y(),
-				board.width(),
-				board.height()
+				"Invalid board crop area: x={}, y={}, w={}, h={}",
+				x,
+				y,
+				w,
+				h
 			);
 			return Ok(Vec::new());
 		}
 
-		let board_cropped = image::imageops::crop_imm(
-			image,
-			board.x() as u32,
-			board.y() as u32,
-			board.width() as u32,
-			board.height() as u32,
-		);
+		let board_cropped = image::imageops::crop_imm(image, x, y, w, h);
 
 		let board_cropped_img = board_cropped.to_image();
 		let (width, height) = (board_cropped_img.width(), board_cropped_img.height());

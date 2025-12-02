@@ -1,6 +1,7 @@
 use std::f64::consts::PI;
 
-use image::{GrayImage, imageops::blur};
+use image::{RgbImage, RgbaImage, imageops::blur};
+use tracing::{debug, trace};
 
 use crate::model::detected::{DetectedBoard, Rect};
 
@@ -11,16 +12,14 @@ const EPSILON: f32 = 1e-6;
 const SOBEL_GX: [[i16; 3]; 3] = [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]];
 const SOBEL_GY: [[i16; 3]; 3] = [[-1, -2, -1], [0, 0, 0], [1, 2, 1]];
 
-const EDGE_THRESHOLD: u16 = 3;
+const EDGE_THRESHOLD: u16 = 40;
 const THETA_BINS: usize = 180;
 const NMS_WINDOW_RHO: usize = 10;
 const NMS_WINDOW_THETA: usize = 5;
-const SEGMENT_GAP_TOLERANCE: usize = 5;
+const SEGMENT_GAP_TOLERANCE: usize = 15;
 const MIN_SEGMENT_FRACTION: f32 = 0.1;
 const VERTICAL_THETA_TOLERANCE: usize = 10;
 const HORIZONTAL_THETA_TOLERANCE: usize = 10;
-
-// --- New Type Aliases & Structs ---
 
 type Rho = f32;
 type Theta = usize;
@@ -142,7 +141,6 @@ impl HoughAccumulator {
 
 	#[inline]
 	fn rho_to_index(&self, rho: Rho) -> usize {
-		// Clamp and round logic to be safe
 		let offset_rho = rho + self.max_rho;
 		let idx = offset_rho.round() as isize;
 		idx.clamp(0, (self.rho_bins as isize) - 1) as usize
@@ -185,39 +183,55 @@ impl HoughAccumulator {
 	}
 }
 
-fn sobel_edge_detection(image: &GrayImage, threshold: u16) -> EdgeMap {
+fn sobel_edge_detection(image: &RgbImage, threshold: u16) -> EdgeMap {
 	let width = image.width() as usize;
 	let height = image.height() as usize;
 	let raw = image.as_raw();
 
-	// Safety check for raw indexing assumption
-	debug_assert_eq!(
-		raw.len(),
-		width * height,
-		"Image must be single channel byte format"
-	);
+	// Safety check: 3 bytes per pixel
+	debug_assert_eq!(raw.len(), width * height * 3, "Image must be RGB format");
 
 	let mut edge_map = EdgeMap::new(width, height);
 
 	for y in 1..height.saturating_sub(1) {
 		for x in 1..width.saturating_sub(1) {
-			let mut gx: i32 = 0;
-			let mut gy: i32 = 0;
+			let mut gx_r: i32 = 0;
+			let mut gy_r: i32 = 0;
+			let mut gx_g: i32 = 0;
+			let mut gy_g: i32 = 0;
+			let mut gx_b: i32 = 0;
+			let mut gy_b: i32 = 0;
 
 			for ky in 0..3 {
 				for kx in 0..3 {
 					let px = x + kx - 1;
 					let py = y + ky - 1;
-					let pixel = raw[py * width + px] as i32;
 
-					gx += pixel * SOBEL_GX[ky][kx] as i32;
-					gy += pixel * SOBEL_GY[ky][kx] as i32;
+					let pixel_idx = (py * width + px) * 3;
+
+					let r = raw[pixel_idx] as i32;
+					let g = raw[pixel_idx + 1] as i32;
+					let b = raw[pixel_idx + 2] as i32;
+
+					let kernel_x = SOBEL_GX[ky][kx] as i32;
+					let kernel_y = SOBEL_GY[ky][kx] as i32;
+
+					gx_r += r * kernel_x;
+					gy_r += r * kernel_y;
+					gx_g += g * kernel_x;
+					gy_g += g * kernel_y;
+					gx_b += b * kernel_x;
+					gy_b += b * kernel_y;
 				}
 			}
 
-			let magnitude = ((gx * gx + gy * gy) as f64).sqrt() as u16;
+			let mag_r = ((gx_r * gx_r + gy_r * gy_r) as f64).sqrt() as u16;
+			let mag_g = ((gx_g * gx_g + gy_g * gy_g) as f64).sqrt() as u16;
+			let mag_b = ((gx_b * gx_b + gy_b * gy_b) as f64).sqrt() as u16;
 
-			if magnitude > threshold {
+			let max_magnitude = mag_r.max(mag_g).max(mag_b);
+
+			if max_magnitude > threshold {
 				edge_map.set_edge(x, y);
 			}
 		}
@@ -262,10 +276,6 @@ fn detect_peaks(
 						continue;
 					}
 
-					// Use checked arithmetic to avoid wrapping confusion
-					// We actually need to check the specific window neighbors, logic was:
-					// (rho +/- dr, theta +/- dt)
-					// We can iterate via signed offsets to keep it clean.
 					let check_offsets = [
 						(dr as isize, dt as isize),
 						(-(dr as isize), dt as isize),
@@ -278,8 +288,6 @@ fn detect_peaks(
 						let t_check = (theta as isize) + t_off;
 
 						if r_check >= 0 && r_check < (accumulator.rho_bins as isize) {
-							// Handle theta wrapping if desired, or just bounds.
-							// Original code wrapped theta. Let's replicate wrapping for theta.
 							let t_wrapped_usize =
 								t_check.rem_euclid(accumulator.theta_bins as isize) as usize;
 							debug_assert!(t_wrapped_usize < accumulator.theta_bins);
@@ -382,7 +390,6 @@ fn measure_hough_line_segment(
 		let x = p0.x + dx * t;
 		let y = p0.y + dy * t;
 
-		// Check bounds before casting/rounding to avoid undefined behavior/panics
 		if x >= 0.0 && y >= 0.0 {
 			let xi = x.round() as usize;
 			let yi = y.round() as usize;
@@ -515,7 +522,7 @@ fn compute_vertical_span(
 	let mut y_starts: Vec<f32> = Vec::new();
 	let mut y_ends: Vec<f32> = Vec::new();
 
-	let tolerance = (v_grid.spacing * 0.05).min(8.0);
+	let tolerance = (v_grid.spacing * 0.25).min(30.0);
 
 	let mut intersections = Vec::with_capacity(4);
 	let mut edge_samples = Vec::with_capacity(1000);
@@ -558,9 +565,9 @@ fn compute_vertical_span(
 
 fn filter_horizontals_by_vertical_span(
 	horizontal_lines: &[HoughLine], edge_map: &EdgeMap, v_span: (f32, f32), v_grid: &GridPattern,
-) -> Vec<f32> {
+) -> Vec<HoughLine> {
 	let (v_y_start, v_y_end) = v_span;
-	let mut filtered_rhos: Vec<f32> = Vec::new();
+	let mut filtered_lines: Vec<HoughLine> = Vec::new();
 	let margin = v_grid.spacing * 0.25;
 
 	let mut intersections = Vec::with_capacity(4);
@@ -593,28 +600,42 @@ fn filter_horizontals_by_vertical_span(
 			};
 
 			if overlap_ratio >= 0.66 {
-				filtered_rhos.push(line.rho);
+				filtered_lines.push(*line);
 			}
 		}
 	}
 
-	filtered_rhos
+	filtered_lines
 }
 
 fn extract_rect_from_lines_with_segments(lines: &[HoughLine], edge_map: &EdgeMap) -> Option<Rect> {
 	if lines.is_empty() {
+		trace!("No lines to extract rect from");
 		return None;
 	}
 
-	let (vertical_lines, horizontal_lines) = cluster_lines_full(lines);
+	let (mut vertical_lines, mut horizontal_lines) = cluster_lines_full(lines);
 
-	let mut vertical_rhos: Vec<f32> = vertical_lines.iter().map(|l| l.rho).collect();
+	trace!(
+		"Clustered lines: {} vertical, {} horizontal",
+		vertical_lines.len(),
+		horizontal_lines.len()
+	);
 
-	let v_grid = find_best_grid(&mut vertical_rhos, None)?;
+	vertical_lines.sort_by(|a, b| a.rho.total_cmp(&b.rho));
+	horizontal_lines.sort_by(|a, b| a.rho.total_cmp(&b.rho));
+
+	let v_grid = match find_best_grid(&vertical_lines, None) {
+		Some(g) => g,
+		None => {
+			debug!("Failed to find vertical grid pattern");
+			return None;
+		}
+	};
 
 	let v_span = compute_vertical_span(&vertical_lines, edge_map, &v_grid);
 
-	let (mut horizontal_rhos, expected_h_spacing) = if let Some(v_span) = v_span {
+	let (mut horizontal_candidates, expected_h_spacing) = if let Some(v_span) = v_span {
 		let filtered =
 			filter_horizontals_by_vertical_span(&horizontal_lines, edge_map, v_span, &v_grid);
 
@@ -623,16 +644,25 @@ fn extract_rect_from_lines_with_segments(lines: &[HoughLine], edge_map: &EdgeMap
 
 		(filtered, spacing_from_span)
 	} else {
-		(
-			horizontal_lines.iter().map(|l| l.rho).collect(),
-			v_grid.spacing,
-		)
+		(horizontal_lines, v_grid.spacing)
 	};
 
-	let h_grid = find_best_grid(&mut horizontal_rhos, Some(expected_h_spacing))?;
+	horizontal_candidates.sort_by(|a, b| a.rho.total_cmp(&b.rho));
+
+	let h_grid = match find_best_grid(&horizontal_candidates, Some(expected_h_spacing)) {
+		Some(g) => g,
+		None => {
+			debug!("Failed to find horizontal grid pattern");
+			return None;
+		}
+	};
 
 	let spacing_diff = (v_grid.spacing - h_grid.spacing).abs();
 	if spacing_diff > v_grid.spacing * 0.1 {
+		debug!(
+			"Grid spacing mismatch: v={:.1}, h={:.1}, diff={:.1}",
+			v_grid.spacing, h_grid.spacing, spacing_diff
+		);
 		return None;
 	}
 
@@ -653,31 +683,86 @@ fn extract_rect_from_lines_with_segments(lines: &[HoughLine], edge_map: &EdgeMap
 		height = avg_size;
 		x = center_x - width / 2.0;
 		y = center_y - height / 2.0;
+	} else if v_intervals == 7 && h_intervals == 8 {
+		debug!("Fixing 7x8 grid by guessing missing vertical line");
+		let cand_w = width + v_grid.spacing;
+
+		let rect_right = Rect::new(x, y, cand_w, height);
+		let rect_left = Rect::new(x - v_grid.spacing, y, cand_w, height);
+
+		let score_right = calculate_grid_score(&rect_right, edge_map);
+		let score_left = calculate_grid_score(&rect_left, edge_map);
+
+		debug!(
+			"  Right extension score: {:.3}, Left: {:.3}",
+			score_right, score_left
+		);
+
+		if score_right >= score_left {
+			width = cand_w;
+		} else {
+			x -= v_grid.spacing;
+			width = cand_w;
+		}
+	} else if v_intervals == 8 && h_intervals == 7 {
+		debug!("Fixing 8x7 grid by guessing missing horizontal line");
+		let cand_h = height + h_grid.spacing;
+
+		let rect_bottom = Rect::new(x, y, width, cand_h);
+		let rect_top = Rect::new(x, y - h_grid.spacing, width, cand_h);
+
+		let score_bottom = calculate_grid_score(&rect_bottom, edge_map);
+		let score_top = calculate_grid_score(&rect_top, edge_map);
+
+		debug!(
+			"  Bottom extension score: {:.3}, Top: {:.3}",
+			score_bottom, score_top
+		);
+
+		if score_bottom >= score_top {
+			height = cand_h;
+		} else {
+			y -= h_grid.spacing;
+			height = cand_h;
+		}
 	}
 
 	Some(Rect::new(x.max(0.0), y.max(0.0), width, height))
 }
 
-fn find_best_grid(rhos: &mut [f32], expected_spacing: Option<f32>) -> Option<GridPattern> {
-	if rhos.len() < 4 {
+fn find_best_grid(lines: &[HoughLine], expected_spacing: Option<f32>) -> Option<GridPattern> {
+	if lines.len() < 4 {
+		trace!("Not enough lines to search for grid ({} < 4)", lines.len());
 		return None;
 	}
-	rhos.sort_by(|a, b| a.total_cmp(b));
 
-	// Deduping logic
-	let mut deduped: Vec<f32> = Vec::new();
-	for &rho in rhos.iter() {
-		match deduped.last() {
-			Some(&last) => {
-				if (rho - last).abs() > 5.0 {
-					deduped.push(rho);
+	let mut deduped: Vec<HoughLine> = Vec::new();
+	if let Some(first) = lines.first() {
+		let mut current_group_best = *first;
+
+		for line in lines.iter().skip(1) {
+			if (line.rho - current_group_best.rho).abs() < 5.0 {
+				if line.votes > current_group_best.votes {
+					current_group_best = *line;
 				}
+			} else {
+				deduped.push(current_group_best);
+				current_group_best = *line;
 			}
-			None => deduped.push(rho),
+		}
+		deduped.push(current_group_best);
+	}
+
+	trace!("Deduped lines: {} -> {}", lines.len(), deduped.len());
+
+	if tracing::enabled!(tracing::Level::TRACE) {
+		for (i, line) in deduped.iter().enumerate() {
+			trace!("  [{}] rho={:.1} votes={}", i, line.rho, line.votes);
 		}
 	}
 
 	if deduped.len() < 4 {
+		trace!("Not enough lines after dedup ({} < 4)", deduped.len());
 		return None;
 	}
 
@@ -687,33 +772,58 @@ fn find_best_grid(rhos: &mut [f32], expected_spacing: Option<f32>) -> Option<Gri
 	// Ideal chess grid is 9 lines (8 squares).
 	let target_count = 9;
 
+	let max_votes = deduped.iter().map(|l| l.votes).max().unwrap_or(1) as f32;
+
 	for i in 0..deduped.len() {
 		for j in (i + 1)..deduped.len() {
-			let diff = deduped[j] - deduped[i];
+			let diff = deduped[j].rho - deduped[i].rho;
 
-			if diff < 20.0 {
+			if diff < 8.0 {
 				continue;
 			}
 
-			if let Some(target) = expected_spacing {
-				// If we know the spacing (from the other axis), be STRICT (5% tolerance)
-				if (diff - target).abs() > target * 0.05 {
-					continue;
-				}
+			if let Some(target) = expected_spacing
+				&& (diff - target).abs() > target * 0.25
+			{
+				continue;
 			}
 
 			let spacing = diff;
-			let (matched_count, first_match, last_match) =
-				count_grid_matches(&deduped, deduped[i], spacing);
+			let (mut matched_lines, mut total_votes) =
+				count_grid_matches(&deduped, deduped[i].rho, spacing);
 
-			if matched_count < 7 {
+			let mut matched_count = matched_lines.len();
+
+			if matched_count > target_count {
+				let mut trimmed = false;
+
+				while matched_count > target_count {
+					let first = matched_lines.first().unwrap();
+					let last = matched_lines.last().unwrap();
+
+					if first.votes < last.votes {
+						total_votes -= first.votes;
+						matched_lines.remove(0);
+					} else {
+						total_votes -= last.votes;
+						matched_lines.pop();
+					}
+					trimmed = true;
+					matched_count = matched_lines.len();
+				}
+
+				if trimmed {
+					total_votes = matched_lines.iter().map(|l| l.votes).sum();
+				}
+			}
+
+			if !(7..=13).contains(&matched_count) {
 				continue;
 			}
-			if matched_count > 13 {
-				continue;
-			}
 
-			// Scoring
+			let first_match = matched_lines.first().unwrap().rho;
+			let last_match = matched_lines.last().unwrap().rho;
+
 			let count_diff = (matched_count as f32 - target_count as f32).abs();
 			let count_score = 20.0 - (count_diff * 5.0);
 
@@ -738,7 +848,22 @@ fn find_best_grid(rhos: &mut [f32], expected_spacing: Option<f32>) -> Option<Gri
 			let span_diff = (span_ratio - ideal_span).abs();
 			let compactness_score = (25.0 - span_diff * 40.0).max(0.0);
 
-			let score = count_score + spacing_score + compactness_score;
+			let avg_votes = total_votes as f32 / matched_count as f32;
+			let strength_score = (avg_votes / max_votes) * 50.0;
+
+			let score = count_score + spacing_score + compactness_score + strength_score;
+
+			trace!(
+				"  Grid candidate: start={:.1} space={:.1} count={} score={:.1} (C={:.1} S={:.1} Comp={:.1} Str={:.1})",
+				first_match,
+				spacing,
+				matched_count,
+				score,
+				count_score,
+				spacing_score,
+				compactness_score,
+				strength_score
+			);
 
 			if score > max_score {
 				max_score = score;
@@ -751,52 +876,133 @@ fn find_best_grid(rhos: &mut [f32], expected_spacing: Option<f32>) -> Option<Gri
 		}
 	}
 
+	if best_grid.is_none() {
+		trace!("No valid grid pattern found. Max score: {:.1}", max_score);
+	}
+
 	best_grid
 }
 
-fn count_grid_matches(rhos: &[f32], start: f32, spacing: f32) -> (usize, f32, f32) {
-	let mut matches = 0;
-	let mut first_pos = start;
-	let mut last_pos = start;
-	let mut found_any = false;
+fn count_grid_matches(lines: &[HoughLine], start: f32, spacing: f32) -> (Vec<HoughLine>, u32) {
+	let mut matches = Vec::new();
+	let mut total_votes = 0;
 
-	let tolerance = (spacing * 0.05).min(8.0);
+	let tolerance = (spacing * 0.25).min(30.0);
 
 	for k in -8..=12 {
 		let target = start + (k as f32 * spacing);
 
-		let found = rhos.iter().any(|&r| (r - target).abs() < tolerance);
+		let best_match = lines
+			.iter()
+			.filter(|l| (l.rho - target).abs() <= tolerance)
+			.max_by_key(|l| l.votes);
 
-		if found {
-			matches += 1;
-			if !found_any {
-				first_pos = target;
-				found_any = true;
-			} else if target < first_pos {
-				first_pos = target;
-			}
-			if target > last_pos {
-				last_pos = target;
-			}
+		if let Some(line) = best_match {
+			matches.push(*line);
+			total_votes += line.votes;
 		}
 	}
 
-	if !found_any {
-		return (0, start, start);
-	}
+	matches.sort_by(|a, b| a.rho.total_cmp(&b.rho));
 
-	(matches, first_pos, last_pos)
+	(matches, total_votes)
 }
 
-pub fn detect_board_hough(image: &GrayImage) -> Option<DetectedBoard> {
-	let width = image.width() as usize;
-	let height = image.height() as usize;
+const GRID_LINES: usize = 9;
+
+fn calculate_grid_score(rect: &Rect, edge_map: &EdgeMap) -> f32 {
+	let mut hits: usize = 0;
+	let mut total: usize = 0;
+	let cols = (GRID_LINES - 1) as f32;
+	let rows = (GRID_LINES - 1) as f32;
+
+	let x0 = rect.x();
+	let y0 = rect.y();
+	let w = rect.width();
+	let h = rect.height();
+
+	if w <= 0.0 || h <= 0.0 {
+		return 0.0;
+	}
+
+	let map_w = edge_map.width();
+	let map_h = edge_map.height();
+
+	let max_samples = 400usize;
+	let vert_len = (h as usize).max(1);
+	let hor_len = (w as usize).max(1);
+	let v_stride = if vert_len > max_samples {
+		((vert_len as f32 / max_samples as f32).ceil() as usize).max(1)
+	} else {
+		1
+	};
+	let h_stride = if hor_len > max_samples {
+		((hor_len as f32 / max_samples as f32).ceil() as usize).max(1)
+	} else {
+		1
+	};
+
+	for i in 0..GRID_LINES {
+		let fx = x0 + (i as f32) * (w / cols);
+		let xi = fx.round() as isize;
+		let mut j = 0usize;
+		while j < vert_len {
+			let yi = (y0.round() as isize) + (j as isize);
+			if xi >= 0 && yi >= 0 {
+				let xu = xi as usize;
+				let yu = yi as usize;
+				if xu < map_w && yu < map_h {
+					total += 1;
+					if edge_map.is_edge(xu, yu) {
+						hits += 1;
+					}
+				}
+			}
+			j = j.saturating_add(v_stride);
+		}
+	}
+
+	for i in 0..GRID_LINES {
+		let fy = y0 + (i as f32) * (h / rows);
+		let yi = fy.round() as isize;
+		let mut j = 0usize;
+		while j < hor_len {
+			let xi = (x0.round() as isize) + (j as isize);
+			if xi >= 0 && yi >= 0 {
+				let xu = xi as usize;
+				let yu = yi as usize;
+				if xu < map_w && yu < map_h {
+					total += 1;
+					if edge_map.is_edge(xu, yu) {
+						hits += 1;
+					}
+				}
+			}
+			j = j.saturating_add(h_stride);
+		}
+	}
+
+	if total == 0 {
+		0.0
+	} else {
+		(hits as f32) / (total as f32)
+	}
+}
+
+pub fn detect_board_hough(image: &RgbaImage) -> Option<DetectedBoard> {
+	let rgb_image = RgbImage::from_fn(image.width(), image.height(), |x, y| {
+		let p = image.get_pixel(x, y);
+		image::Rgb([p[0], p[1], p[2]])
+	});
+
+	let width = rgb_image.width() as usize;
+	let height = rgb_image.height() as usize;
 
 	if width == 0 || height == 0 {
 		return None;
 	}
 
-	let blurred_image = blur(image, BELL_FLATTENING_LEVEL);
+	let blurred_image = blur(&rgb_image, BELL_FLATTENING_LEVEL);
 
 	let edge_map = sobel_edge_detection(&blurred_image, EDGE_THRESHOLD);
 
@@ -807,19 +1013,140 @@ pub fn detect_board_hough(image: &GrayImage) -> Option<DetectedBoard> {
 	let max_lines = 200;
 
 	let lines_raw = detect_peaks(&accumulator, vote_threshold, max_lines);
+	debug!(
+		"Detected {} raw Hough lines (threshold: {})",
+		lines_raw.len(),
+		vote_threshold
+	);
+
 	if lines_raw.is_empty() {
 		return None;
 	}
 
 	let rect = extract_rect_from_lines_with_segments(&lines_raw, &edge_map)?;
 
+	const MAX_ITERS_PER_STEP: usize = 10;
+	const MIN_SCORE_DELTA: f32 = 1e-4;
+
+	fn refine_rect_with_edges(initial_rect: Rect, edge_map: &EdgeMap) -> Rect {
+		let mut best = initial_rect;
+		let mut best_score = calculate_grid_score(&best, edge_map);
+
+		let steps = [4.0_f32, 2.0_f32, 1.0_f32, 0.5_f32];
+
+		let init_aspect = if initial_rect.height() > 0.0 {
+			initial_rect.width() / initial_rect.height()
+		} else {
+			0.0
+		};
+		let keep_square = (0.95..=1.05).contains(&init_aspect);
+
+		let map_w = edge_map.width() as f32;
+		let map_h = edge_map.height() as f32;
+
+		for &step in &steps {
+			let mut made_improvement_this_step = true;
+			let mut iter_count = 0usize;
+
+			while made_improvement_this_step && iter_count < MAX_ITERS_PER_STEP {
+				iter_count += 1;
+				made_improvement_this_step = false;
+
+				for &dx in &[-step, 0.0_f32, step] {
+					for &dy in &[-step, 0.0_f32, step] {
+						if keep_square {
+							for &d_size in &[-step, 0.0_f32, step] {
+								if dx == 0.0 && dy == 0.0 && d_size == 0.0 {
+									continue;
+								}
+
+								let mut cand_x = (best.x() + dx).max(0.0);
+								let mut cand_y = (best.y() + dy).max(0.0);
+								let mut cand_w = (best.width() + d_size).max(1.0);
+								let mut cand_h = (best.height() + d_size).max(1.0);
+
+								cand_w = cand_w.clamp(1.0, map_w - cand_x);
+								cand_h = cand_h.clamp(1.0, map_h - cand_y);
+
+								cand_x = cand_x.clamp(0.0, (map_w - cand_w).max(0.0));
+								cand_y = cand_y.clamp(0.0, (map_h - cand_h).max(0.0));
+
+								let cand = Rect::new(cand_x, cand_y, cand_w, cand_h);
+								let score = calculate_grid_score(&cand, edge_map);
+
+								if score > best_score + MIN_SCORE_DELTA {
+									best_score = score;
+									best = cand;
+									made_improvement_this_step = true;
+									break;
+								}
+							}
+						} else {
+							for &dw in &[-step, 0.0_f32, step] {
+								for &dh in &[-step, 0.0_f32, step] {
+									if dx == 0.0 && dy == 0.0 && dw == 0.0 && dh == 0.0 {
+										continue;
+									}
+
+									let mut cand_x = (best.x() + dx).max(0.0);
+									let mut cand_y = (best.y() + dy).max(0.0);
+									let mut cand_w = (best.width() + dw).max(1.0);
+									let mut cand_h = (best.height() + dh).max(1.0);
+
+									cand_w = cand_w.clamp(1.0, map_w - cand_x);
+									cand_h = cand_h.clamp(1.0, map_h - cand_y);
+
+									cand_x = cand_x.clamp(0.0, (map_w - cand_w).max(0.0));
+									cand_y = cand_y.clamp(0.0, (map_h - cand_h).max(0.0));
+
+									let cand = Rect::new(cand_x, cand_y, cand_w, cand_h);
+									let score = calculate_grid_score(&cand, edge_map);
+
+									if score > best_score + MIN_SCORE_DELTA {
+										best_score = score;
+										best = cand;
+										made_improvement_this_step = true;
+										break;
+									}
+								}
+								if made_improvement_this_step {
+									break;
+								}
+							}
+						}
+						if made_improvement_this_step {
+							break;
+						}
+					}
+					if made_improvement_this_step {
+						break;
+					}
+				}
+			}
+		}
+
+		best
+	}
+
+	let refined_rect = refine_rect_with_edges(rect, &edge_map);
+	debug!("Refined rect from {:?} to {:?}", rect, refined_rect);
+
+	let rect = refined_rect;
+
 	let aspect_ratio = rect.width() / rect.height();
 	if !(0.7..=1.3).contains(&aspect_ratio) {
+		debug!("Board rejected due to aspect ratio: {:.2}", aspect_ratio);
 		return None;
 	}
 
 	let min_dimension = (width.min(height) as f32) * 0.1;
 	if rect.width() < min_dimension || rect.height() < min_dimension {
+		debug!(
+			"Board rejected due to size: {:.0}x{:.0} < min {:.0}",
+			rect.width(),
+			rect.height(),
+			min_dimension
+		);
 		return None;
 	}
 
@@ -828,7 +1155,7 @@ pub fn detect_board_hough(image: &GrayImage) -> Option<DetectedBoard> {
 
 pub struct BoardStabilizer {
 	smoothed_rect: Option<Rect>,
-	alpha: f32, // Smoothing factor (0.0 to 1.0)
+	alpha: f32,
 }
 
 impl BoardStabilizer {
@@ -841,15 +1168,12 @@ impl BoardStabilizer {
 
 	pub fn update(&mut self, new_detection: Option<DetectedBoard>) -> Option<DetectedBoard> {
 		match (self.smoothed_rect, new_detection) {
-			// Case 1: We have a history, and we just found a new board
 			(Some(prev), Some(curr)) => {
-				// If the new board is wildly different (e.g. user dragged the window), snap to it instantly
 				if (prev.x() - curr.rect.x()).abs() > 50.0
 					|| (prev.width() - curr.rect.width()).abs() > 50.0
 				{
 					self.smoothed_rect = Some(curr.rect);
 				} else {
-					// Otherwise, smooth it (Linear Interpolation)
 					let new_x = prev.x() + (curr.rect.x() - prev.x()) * self.alpha;
 					let new_y = prev.y() + (curr.rect.y() - prev.y()) * self.alpha;
 					let new_w = prev.width() + (curr.rect.width() - prev.width()) * self.alpha;
@@ -858,13 +1182,10 @@ impl BoardStabilizer {
 					self.smoothed_rect = Some(Rect::new(new_x, new_y, new_w, new_h));
 				}
 			}
-			// Case 2: First time seeing a board
 			(None, Some(curr)) => {
 				self.smoothed_rect = Some(curr.rect);
 			}
-			// Case 3: Lost the board this frame?
 			(_, None) => {
-				// Clear smoothed rect when detection is lost to prevent ghosting.
 				self.smoothed_rect = None;
 			}
 		}
