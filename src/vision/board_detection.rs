@@ -789,89 +789,151 @@ fn find_best_grid(lines: &[HoughLine], expected_spacing: Option<f32>) -> Option<
 			}
 
 			let spacing = diff;
-			let (mut matched_lines, mut total_votes) =
-				count_grid_matches(&deduped, deduped[i].rho, spacing);
+			let (matched_lines_full, _) = count_grid_matches(&deduped, deduped[i].rho, spacing);
 
-			let mut matched_count = matched_lines.len();
+			let total_matched_count = matched_lines_full.len();
 
-			if matched_count > target_count {
-				let mut trimmed = false;
-
-				while matched_count > target_count {
-					let first = matched_lines.first().unwrap();
-					let last = matched_lines.last().unwrap();
-
-					if first.votes < last.votes {
-						total_votes -= first.votes;
-						matched_lines.remove(0);
-					} else {
-						total_votes -= last.votes;
-						matched_lines.pop();
-					}
-					trimmed = true;
-					matched_count = matched_lines.len();
-				}
-
-				if trimmed {
-					total_votes = matched_lines.iter().map(|l| l.votes).sum();
-				}
-			}
-
-			if !(7..=13).contains(&matched_count) {
+			if total_matched_count < 7 {
 				continue;
 			}
 
-			let first_match = matched_lines.first().unwrap().rho;
-			let last_match = matched_lines.last().unwrap().rho;
-
-			let count_diff = (matched_count as f32 - target_count as f32).abs();
-			let count_score = 20.0 - (count_diff * 5.0);
-
-			let spacing_score = if let Some(target) = expected_spacing {
-				let error_pct = (spacing - target).abs() / target;
-				(1.0 - error_pct) * 200.0
+			let windows_count = if total_matched_count > target_count {
+				total_matched_count - target_count + 1
 			} else {
-				0.0
+				1
 			};
 
-			let span = last_match - first_match;
-			let span_ratio = span / spacing;
+			for w_idx in 0..windows_count {
+				let count = if total_matched_count > target_count {
+					target_count
+				} else {
+					total_matched_count
+				};
+				let start_idx = if total_matched_count > target_count {
+					w_idx
+				} else {
+					0
+				};
 
-			if span_ratio > 8.6 {
-				continue;
-			}
-			if span_ratio < 4.0 {
-				continue;
-			}
+				let matched_lines = &matched_lines_full[start_idx..start_idx + count];
+				let matched_count = matched_lines.len();
 
-			let ideal_span = 8.0;
-			let span_diff = (span_ratio - ideal_span).abs();
-			let compactness_score = (25.0 - span_diff * 40.0).max(0.0);
+				let total_votes: u32 = matched_lines.iter().map(|l| l.votes).sum();
 
-			let avg_votes = total_votes as f32 / matched_count as f32;
-			let strength_score = (avg_votes / max_votes) * 50.0;
+				if !(7..=13).contains(&matched_count) {
+					continue;
+				}
 
-			let score = count_score + spacing_score + compactness_score + strength_score;
+				let first_match = matched_lines.first().unwrap().rho;
+				let last_match = matched_lines.last().unwrap().rho;
 
-			trace!(
-				"  Grid candidate: start={:.1} space={:.1} count={} score={:.1} (C={:.1} S={:.1} Comp={:.1} Str={:.1})",
-				first_match,
-				spacing,
-				matched_count,
-				score,
-				count_score,
-				spacing_score,
-				compactness_score,
-				strength_score
-			);
+				let count_diff = (matched_count as f32 - target_count as f32).abs();
+				let count_score = 20.0 - (count_diff * 5.0);
 
-			if score > max_score {
-				max_score = score;
-				best_grid = Some(GridPattern {
-					start: first_match,
-					end: last_match,
+				let spacing_score = if let Some(target) = expected_spacing {
+					let error_pct = (spacing - target).abs() / target;
+					(1.0 - error_pct) * 200.0
+				} else {
+					0.0
+				};
+
+				let avg_votes = total_votes as f32 / matched_count as f32;
+				let strength_score = (avg_votes / max_votes) * 50.0;
+
+				let mut points = Vec::with_capacity(matched_count);
+				for line in matched_lines {
+					let k = ((line.rho - first_match) / spacing).round();
+					points.push((k, line.rho));
+				}
+
+				let n = points.len() as f32;
+				let sum_x: f32 = points.iter().map(|(x, _)| x).sum();
+				let sum_y: f32 = points.iter().map(|(_, y)| y).sum();
+				let sum_xy: f32 = points.iter().map(|(x, y)| x * y).sum();
+				let sum_xx: f32 = points.iter().map(|(x, _)| x * x).sum();
+
+				let denominator = n * sum_xx - sum_x * sum_x;
+				let (refined_spacing, refined_start) = if denominator.abs() > 1e-6 {
+					let slope = (n * sum_xy - sum_x * sum_y) / denominator;
+					let intercept = (sum_y - slope * sum_x) / n;
+					(slope, intercept)
+				} else {
+					(spacing, first_match)
+				};
+
+				let mut total_error_sq = 0.0;
+				for (k, rho) in points {
+					let target = refined_start + k * refined_spacing;
+					let error = (rho - target).abs();
+					total_error_sq += error * error;
+				}
+				let rmse = (total_error_sq / n).sqrt();
+				let alignment_score = (1.0 - rmse / 15.0).max(0.0) * 20.0;
+
+				let span = last_match - first_match;
+				let span_ratio = span / refined_spacing;
+
+				if span_ratio > 8.6 {
+					continue;
+				}
+				if span_ratio < 4.0 {
+					continue;
+				}
+
+				let ideal_span = 8.0;
+				let span_diff = (span_ratio - ideal_span).abs();
+				let compactness_score = (25.0 - span_diff * 40.0).max(0.0);
+
+				let variance_score = if matched_count > 2 {
+					let mut gaps = Vec::with_capacity(matched_count - 1);
+					for k in 0..matched_count - 1 {
+						let gap = matched_lines[k + 1].rho - matched_lines[k].rho;
+						gaps.push(gap);
+					}
+					let mean_gap: f32 = gaps.iter().sum::<f32>() / gaps.len() as f32;
+					let variance: f32 = gaps.iter().map(|g| (g - mean_gap).powi(2)).sum::<f32>()
+						/ gaps.len() as f32;
+					let std_dev = variance.sqrt();
+
+					if mean_gap > 0.0 {
+						let cv = std_dev / mean_gap;
+						(1.0 - cv * 10.0).max(0.0) * 20.0
+					} else {
+						0.0
+					}
+				} else {
+					0.0
+				};
+
+				let score = count_score
+					+ spacing_score + compactness_score
+					+ strength_score
+					+ variance_score
+					+ alignment_score;
+
+				trace!(
+					"  Grid candidate (w={}): start={:.1} space={:.1} count={} score={:.1} (C={:.1} S={:.1} Comp={:.1} Str={:.1} Var={:.1} Align={:.1})",
+					w_idx,
+					first_match,
 					spacing,
-				});
+					matched_count,
+					score,
+					count_score,
+					spacing_score,
+					compactness_score,
+					strength_score,
+					variance_score,
+					alignment_score
+				);
+
+				if score > max_score {
+					max_score = score;
+					best_grid = Some(GridPattern {
+						start: first_match,
+						end: last_match,
+						spacing,
+					});
+				}
 			}
 		}
 	}
