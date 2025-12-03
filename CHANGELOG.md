@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4](https://github.com/namecallfilter/lunar-chess/compare/v0.2.3...v0.2.4) - 2025-12-03
+
+### Added
+
+- *(engine)* only show mate moves if you have a mate-in <x> ([#27](https://github.com/namecallfilter/lunar-chess/pull/27))
+
+### Fixed
+
+- *(board_detection)* Incorrectly inlcuding eval bar ([#29](https://github.com/namecallfilter/lunar-chess/pull/29))
+
+### Other
+
+- *(board_detection)* change into a more modular structure ([#30](https://github.com/namecallfilter/lunar-chess/pull/30))
+
 ## [0.2.3](https://github.com/namecallfilter/lunar-chess/compare/v0.2.2...v0.2.3) - 2025-12-02
 
 ### Other
