@@ -190,11 +190,16 @@ impl DetectedPiece {
 pub struct BoardState {
 	pub board: DetectedBoard,
 	pub pieces: Vec<DetectedPiece>,
+	pub version: u64,
 }
 
 impl BoardState {
-	pub fn new(board: DetectedBoard, pieces: Vec<DetectedPiece>) -> Self {
-		Self { board, pieces }
+	pub fn new(board: DetectedBoard, pieces: Vec<DetectedPiece>, version: u64) -> Self {
+		Self {
+			board,
+			pieces,
+			version,
+		}
 	}
 
 	pub fn to_fen(&self) -> Result<Fen, BoardToFenError> {
