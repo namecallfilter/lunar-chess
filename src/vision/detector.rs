@@ -124,7 +124,7 @@ impl ChessDetector {
 		let h = bh.min(remaining_h).floor() as u32;
 
 		if w == 0 || h == 0 {
-			tracing::debug!(
+			tracing::warn!(
 				"Invalid board crop area: x={}, y={}, w={}, h={}",
 				x,
 				y,
@@ -202,7 +202,6 @@ impl ChessDetector {
 fn image_to_tensor_inplace(image: &RgbaImage, array: &mut Array4<f32>) {
 	let (width, height) = image.dimensions();
 
-	// Verify shapes match to avoid panics
 	if array.shape()[2] != height as usize || array.shape()[3] != width as usize {
 		tracing::error!(
 			"Tensor shape mismatch: expected [_, _, {}, {}], got {:?}",
@@ -213,12 +212,10 @@ fn image_to_tensor_inplace(image: &RgbaImage, array: &mut Array4<f32>) {
 		return;
 	}
 
-	// Optimize using flat slice if contiguous
 	if let Some(slice) = array.as_slice_mut() {
 		let raw = image.as_raw();
 		let plane_size = (width * height) as usize;
 
-		// Assuming model expects standard RGB planar layout normalized 0..1
 		for (i, chunk) in raw.chunks_exact(4).enumerate() {
 			let r = chunk[0] as f32 / 255.0;
 			let g = chunk[1] as f32 / 255.0;
@@ -229,7 +226,6 @@ fn image_to_tensor_inplace(image: &RgbaImage, array: &mut Array4<f32>) {
 			slice[plane_size * 2 + i] = b;
 		}
 	} else {
-		// Fallback to slower indexing if not contiguous
 		for (x, y, pixel) in image.enumerate_pixels() {
 			let xi = x as usize;
 			let yi = y as usize;

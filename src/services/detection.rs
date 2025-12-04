@@ -92,7 +92,7 @@ fn run_detection_loop(
 
 	let mut detector = ChessDetector::new()?;
 
-	tracing::debug!(
+	tracing::trace!(
 		"Detection loop started (interval: {:?})",
 		DETECTION_INTERVAL
 	);
@@ -105,6 +105,7 @@ fn run_detection_loop(
 	while !shutdown.load(Ordering::Acquire) {
 		let loop_start = Instant::now();
 
+		let capture_start = Instant::now();
 		let image = match capture.capture() {
 			Ok(img) => img,
 			Err(e) => {
@@ -116,13 +117,15 @@ fn run_detection_loop(
 				continue;
 			}
 		};
+		tracing::trace!("Capture wait took {:?}", capture_start.elapsed());
 
 		let board = if cached_board.is_none()
 			|| frames_since_board_detection >= BOARD_DETECTION_INTERVAL_FRAMES
 		{
-			match detector.detect_board(&image) {
+			let board_start = Instant::now();
+			let res = match detector.detect_board(&image) {
 				Ok(Some(b)) => {
-					tracing::debug!(
+					tracing::trace!(
 						"Board detected at ({}, {}) size {}x{}",
 						b.x() as i32,
 						b.y() as i32,
@@ -145,7 +148,9 @@ fn run_detection_loop(
 					cached_board = None;
 					None
 				}
-			}
+			};
+			tracing::trace!("Board detection took {:?}", board_start.elapsed());
+			res
 		} else {
 			frames_since_board_detection += 1;
 			cached_board
@@ -166,10 +171,11 @@ fn run_detection_loop(
 			}
 		};
 
+		let pieces_start = Instant::now();
 		let pieces = match detector.detect_pieces(&image, &board) {
 			Ok(p) => {
 				if p.len() > crate::vision::detector::MAX_PIECES {
-					tracing::debug!("Too many pieces detected ({}), skipping", p.len());
+					tracing::warn!("Too many pieces detected ({}), skipping", p.len());
 					Vec::new()
 				} else {
 					p
@@ -180,6 +186,7 @@ fn run_detection_loop(
 				Vec::new()
 			}
 		};
+		tracing::trace!("Piece detection took {:?}", pieces_start.elapsed());
 
 		let mut board = board;
 		if !pieces.is_empty() && detected_orientation.is_none() {
@@ -215,7 +222,11 @@ fn run_detection_loop(
 
 		if !pieces.is_empty() && pieces.len() <= crate::vision::detector::MAX_PIECES {
 			let mut state_lock = board_state.lock();
-			*state_lock = Some(BoardState::new(board, pieces.clone()));
+			let next_version = match &*state_lock {
+				Some(s) => s.version.wrapping_add(1),
+				None => 1,
+			};
+			*state_lock = Some(BoardState::new(board, pieces.clone(), next_version));
 			board_changed.notify_all();
 		}
 
@@ -224,6 +235,7 @@ fn run_detection_loop(
 		}
 
 		let total_time = loop_start.elapsed();
+		tracing::trace!("Total detection loop time: {:?}", total_time);
 
 		if total_time < DETECTION_INTERVAL {
 			let mut lock = wake_lock.lock();

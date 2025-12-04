@@ -337,7 +337,7 @@ pub fn draw_piece_labels(dt: &mut DrawTarget, pieces: &[DetectedPiece]) {
 			static WARNED: std::sync::atomic::AtomicBool =
 				std::sync::atomic::AtomicBool::new(false);
 			if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-				tracing::debug!("System font for labels not found, skipping label rendering");
+				tracing::warn!("System font for labels not found, skipping label rendering");
 			}
 			return;
 		};

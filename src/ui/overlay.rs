@@ -279,8 +279,10 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 				event_loop.exit();
 			}
 			WindowEvent::RedrawRequested => {
+				let start = Instant::now();
 				self.draw();
 				self.render();
+				tracing::trace!("UI redraw took {:?}", start.elapsed());
 			}
 			WindowEvent::Resized(size) => {
 				if let Some(resources) = &mut self.resources
