@@ -55,7 +55,6 @@ pub struct GoConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DebuggingConfig {
 	pub level: String,
-	pub stream_proof: bool,
 	pub show_grid: bool,
 	pub show_piece_labels: bool,
 }

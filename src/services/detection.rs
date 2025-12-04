@@ -12,7 +12,7 @@ use parking_lot::{Condvar, Mutex};
 use winit::event_loop::EventLoopProxy;
 
 use crate::{
-	capture::screen::ScreenCapture,
+	capture::ScreenCapture,
 	model::detected::{BoardOrientation, BoardState, DetectedBoard},
 	ui::{SharedBoardState, UserEvent},
 	vision::detector::ChessDetector,

@@ -78,10 +78,6 @@ impl OverlayWindow {
 		self.should_redraw = true;
 	}
 
-	pub fn set_screen_size(&mut self, screen_size: ScreenDimensions) {
-		self.screen_size = screen_size;
-	}
-
 	fn draw(&mut self) {
 		if let (Some(resources), Some(board)) = (&mut self.resources, self.board.as_ref()) {
 			let dt = &mut resources.draw_target;
@@ -192,6 +188,16 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 
 	fn resumed(&mut self, event_loop: &ActiveEventLoop) {
 		if self.resources.is_none() {
+			let monitor = event_loop
+				.primary_monitor()
+				.or_else(|| event_loop.available_monitors().next());
+
+			if let Some(monitor) = monitor {
+				let size = monitor.size();
+				self.screen_size = ScreenDimensions::new(size.width, size.height);
+				tracing::info!("Detected screen size: {}x{}", size.width, size.height);
+			}
+
 			let window_attributes = Window::default_attributes()
 				.with_title("Lunar Chess Overlay")
 				.with_transparent(true)
@@ -212,34 +218,9 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 				}
 			};
 
-			#[cfg(target_os = "windows")]
-			{
-				use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-				if let Err(e) = window.set_cursor_hittest(false) {
-					tracing::debug!("Failed to set cursor hittest: {}", e);
-				}
+			let _ = window.set_cursor_hittest(false);
 
-				unsafe {
-					use windows::Win32::{
-						Foundation::HWND,
-						UI::WindowsAndMessaging::{
-							SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
-						},
-					};
-
-					match window.window_handle() {
-						Ok(handle) => {
-							if let RawWindowHandle::Win32(handle) = handle.as_raw()
-								&& CONFIG.debugging.stream_proof
-							{
-								let hwnd = HWND(handle.hwnd.get() as *mut _);
-								let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
-							}
-						}
-						Err(e) => tracing::debug!("Failed to get window handle: {}", e),
-					}
-				}
-			}
+			window.set_content_protected(true);
 
 			let context = match softbuffer::Context::new(window.clone()) {
 				Ok(c) => c,
@@ -323,13 +304,9 @@ impl ApplicationHandler<UserEvent> for OverlayWindow {
 	}
 }
 
-pub fn start_overlay(
-	screen_size: ScreenDimensions,
-) -> Result<(EventLoop<UserEvent>, OverlayWindow)> {
+pub fn start_overlay() -> Result<(EventLoop<UserEvent>, OverlayWindow)> {
 	let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
 
-	let mut app = OverlayWindow::new();
-	app.set_screen_size(screen_size);
-
+	let app = OverlayWindow::new();
 	Ok((event_loop, app))
 }

@@ -14,7 +14,7 @@ uci.MultiPV = "6"
 
 # Go commands control the search parameters
 # See https://backscattering.de/chess/uci/#gui-go for available commands
-go.depth = 5
+go.movetime = 10000
 
 [detection]
 path = "" # Path to the ONNX file that detect the pieces
@@ -22,6 +22,5 @@ piece_confidence_threshold = 0.75 # Threshold to show the pieces based on its co
 
 [debugging]
 level = "info" # Level to show the logs: info, debug, warn, error, trace
-stream_proof = true # Whether to show the overlay on screen
 show_grid = false # Shows the detected grid
 show_piece_labels = false # Shows which pieces are labeled what

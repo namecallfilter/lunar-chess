@@ -13,7 +13,6 @@ mod services;
 mod ui;
 mod vision;
 
-use capture::screen::ScreenCapture;
 use config::CONFIG;
 use services::{AnalysisService, DetectionService};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -47,10 +46,7 @@ fn main() -> Result<()> {
 
 	let init_start = std::time::Instant::now();
 
-	let capture = ScreenCapture::new()?;
-	let screen_size = capture.dimensions();
-
-	let (event_loop, mut app) = start_overlay(screen_size)?;
+	let (event_loop, mut app) = start_overlay()?;
 
 	tracing::info!("Initialized in {:?}", init_start.elapsed());
 

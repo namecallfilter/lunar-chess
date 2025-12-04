@@ -7,8 +7,8 @@ A screen overlay that detects chessboards, recognizes pieces using ONNX, and dis
 | Platform | Status |
 |----------|--------|
 | Windows  | Supported |
-| macOS    | Coming soon |
-| Linux    | Coming soon |
+| macOS    | Supported |
+| Linux    | Cannot support due to X11 and Wayland limitations |
 
 ## Setup
 
@@ -21,25 +21,31 @@ A screen overlay that detects chessboards, recognizes pieces using ONNX, and dis
 
 ```toml
 [engine]
-path = "path/to/engine.exe"
-args = []
-profile = "default"
+path = "" # Path to the exe of the engine
+args = [] # Any args you give the engine like '--weights='
+book = "" # Optional: Path to a .bin polyglot opening book
+profile = "default" # The profile to use from [profiles.<name>]
 
+# Profiles to change the UCI options and go
 [profiles.default]
-threads = 8
-hash = 8192
-multi_pv = 6
-depth = 5
+# UCI options are passed directly to the engine via "setoption"
+# See https://backscattering.de/chess/uci/#engine-option for standard options
+uci.Threads = "8"
+uci.Hash = "8192"
+uci.MultiPV = "6"
+
+# Go commands control the search parameters
+# See https://backscattering.de/chess/uci/#gui-go for available commands
+go.movetime = 10000
 
 [detection]
-path = "path/to/model.onnx"
-piece_confidence_threshold = 0.75
+path = "" # Path to the ONNX file that detect the pieces
+piece_confidence_threshold = 0.75 # Threshold to show the pieces based on its confidence
 
 [debugging]
-level = "info"
-stream_proof = true
-show_grid = false
-show_piece_labels = false
+level = "info" # Level to show the logs: info, debug, warn, error, trace
+show_grid = false # Shows the detected grid
+show_piece_labels = false # Shows which pieces are labeled what
 ```
 
 ## Usage
