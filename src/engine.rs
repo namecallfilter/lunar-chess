@@ -13,8 +13,6 @@ use crate::{
 	errors::{AnalysisError, Fen},
 };
 
-// TODO: Support mac and linux engine
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MoveNotation(String);
 

@@ -6,32 +6,29 @@ description = "A screen overlay that detects chessboards, recognizes pieces usin
 license = "MIT"
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0"
 config = { version = "0.15", features = ["toml"] }
 fast_image_resize = { version = "5.4", features = ["image", "rayon"] }
-font-kit = "0.14.3"
-image = "0.25.9"
+font-kit = "0.14"
+image = "0.25"
 ndarray = "0.16.1"
-once_cell = "1.21.3"
-ort = { version = "2.0.0-rc.10", features = ["cuda"] }
+once_cell = "1.21"
+ort = { version = "2.0.0-rc.10", features = ["cuda", "directml", "coreml"] }
 parking_lot = "0.12"
 polyglot-book-rs = "0.1.0"
-raqote = "0.8.5"
+raqote = "0.8"
 rayon = "1.11"
-ruci = { version = "2.1.0", features = ["engine-sync"] }
-serde = { version = "1.0.228", features = ["derive"] }
+ruci = { version = "2.1", features = ["engine-sync"] }
+scap = "0.1.0-beta.1"
+serde = { version = "1.0", features = ["derive"] }
 softbuffer = "0.4"
-thiserror = "2.0.17"
+thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 winit = "0.30"
 
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = [
-	"Win32_Foundation",
-	"Win32_UI_WindowsAndMessaging",
-] }
-windows-capture = "1.5"
+[patch.crates-io]
+scap = { git = "https://github.com/namecallfilter/scap", branch = "fix/windows-build" }
 
 [profile.release]
 strip = true
