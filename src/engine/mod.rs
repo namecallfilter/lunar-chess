@@ -1,7 +1,9 @@
 use std::{
 	borrow::Cow,
-	io::BufReader,
-	process::{ChildStdin, ChildStdout, Command, Stdio},
+	io::{BufReader, Write},
+	process::{ChildStdout, Command, Stdio},
+	sync::{Arc, Mutex},
+	time::Instant,
 };
 
 use anyhow::Result;
@@ -12,6 +14,43 @@ use crate::{
 	config::{CONFIG, PROFILE},
 	errors::{AnalysisError, Fen},
 };
+
+pub mod manager;
+
+#[derive(Clone)]
+pub struct SharedOutputStream {
+	inner: Arc<Mutex<dyn Write + Send>>,
+}
+
+impl SharedOutputStream {
+	pub fn new(inner: impl Write + Send + 'static) -> Self {
+		Self {
+			inner: Arc::new(Mutex::new(inner)),
+		}
+	}
+}
+
+impl Write for SharedOutputStream {
+	fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+		match self.inner.lock() {
+			Ok(mut guard) => guard.write(buf),
+			Err(poisoned) => {
+				tracing::error!("SharedOutputStream mutex poisoned, recovering");
+				poisoned.into_inner().write(buf)
+			}
+		}
+	}
+
+	fn flush(&mut self) -> std::io::Result<()> {
+		match self.inner.lock() {
+			Ok(mut guard) => guard.flush(),
+			Err(poisoned) => {
+				tracing::error!("SharedOutputStream mutex poisoned, recovering");
+				poisoned.into_inner().flush()
+			}
+		}
+	}
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MoveNotation(String);
@@ -46,8 +85,9 @@ pub struct MoveWithScore {
 }
 
 pub struct EngineWrapper {
-	engine: ruci::Engine<BufReader<ChildStdout>, ChildStdin>,
+	engine: ruci::Engine<BufReader<ChildStdout>, SharedOutputStream>,
 	process: std::process::Child,
+	stdin: SharedOutputStream,
 	book: Option<PolyglotBook>,
 	current_position: Option<Fen>,
 }
@@ -77,8 +117,20 @@ impl EngineWrapper {
 			.spawn()
 			.map_err(|e| AnalysisError::EngineStartFailed(e.to_string()))?;
 
-		let mut engine = ruci::Engine::from_process(&mut process, false)
-			.map_err(|e| AnalysisError::EngineStartFailed(e.to_string()))?;
+		let stdin = process.stdin.take().ok_or_else(|| {
+			AnalysisError::EngineStartFailed("Failed to capture engine stdin".to_string())
+		})?;
+
+		let stdout = process.stdout.take().ok_or_else(|| {
+			AnalysisError::EngineStartFailed("Failed to capture engine stdout".to_string())
+		})?;
+
+		let shared_stdin = SharedOutputStream::new(stdin);
+		let mut engine = ruci::Engine {
+			engine: BufReader::new(stdout),
+			gui: shared_stdin.clone(),
+			strict: false,
+		};
 
 		engine.use_uci(|_| {})?;
 		engine.is_ready()?;
@@ -93,9 +145,14 @@ impl EngineWrapper {
 		Ok(Self {
 			engine,
 			process,
+			stdin: shared_stdin,
 			book,
 			current_position: None,
 		})
+	}
+
+	pub fn get_stopper(&self) -> SharedOutputStream {
+		self.stdin.clone()
 	}
 
 	pub fn set_position(&mut self, fen: &Fen) -> Result<()> {
@@ -179,6 +236,7 @@ impl EngineWrapper {
 			ruci::Go::default()
 		};
 
+		let search_start = Instant::now();
 		self.engine.go(&go_params, |info| {
 			let Some(score_with_bound) = info.score else {
 				return;
@@ -221,6 +279,8 @@ impl EngineWrapper {
 				on_update(&best_moves);
 			}
 		})?;
+
+		tracing::trace!("Engine search took {:?}", search_start.elapsed());
 
 		Ok(best_moves)
 	}

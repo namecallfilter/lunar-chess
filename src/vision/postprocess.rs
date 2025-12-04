@@ -16,7 +16,7 @@ pub fn from_yolo_output(
 	let threshold = confidence_threshold.value();
 	let shape = predictions.shape();
 	if shape.len() < 3 {
-		tracing::debug!("Invalid YOLO output shape for piece detection");
+		tracing::warn!("Invalid YOLO output shape for piece detection");
 		return Vec::new();
 	}
 

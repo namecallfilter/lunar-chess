@@ -17,8 +17,6 @@ impl Score {
 		Self::MateIn(moves)
 	}
 
-	/// to_numeric encodes MateIn(n) such that positive n denotes mate-for-side-X (document which side),
-	/// and returns a large magnitude value so mate beats any centipawn score.
 	#[inline]
 	pub const fn to_numeric(self) -> i32 {
 		match self {

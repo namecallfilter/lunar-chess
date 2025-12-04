@@ -3,7 +3,7 @@ use std::{
 		Arc,
 		atomic::{AtomicBool, AtomicU8, Ordering},
 	},
-	time::Duration,
+	time::{Duration, Instant},
 };
 
 use anyhow::Result;
@@ -102,6 +102,7 @@ fn run_capture_loop(inner: Arc<InnerCapture>) -> Result<()> {
 	loop {
 		match capturer.get_next_frame() {
 			Ok(Frame::Video(VideoFrame::BGRA(frame))) => {
+				let start = Instant::now();
 				let mut write_guard = inner.double_buffer.write_buffer();
 				let img = Arc::make_mut(&mut *write_guard);
 				let raw_data = &frame.data;
@@ -128,6 +129,7 @@ fn run_capture_loop(inner: Arc<InnerCapture>) -> Result<()> {
 				drop(write_guard);
 				inner.double_buffer.swap();
 				inner.ready.store(true, Ordering::Release);
+				tracing::trace!("Capture frame processed in {:?}", start.elapsed());
 			}
 			Ok(_) => {}
 			Err(e) => {

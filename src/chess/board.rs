@@ -5,9 +5,13 @@ use super::{
 
 pub fn parse_move(move_str: &str, player_color: PlayerColor) -> Option<ChessMove> {
 	let s = move_str.trim();
-	if s.len() != 4 {
+
+	// Allow either 4-character UCI moves (e.g. e2e4) or 5-character (ignore 5th for now)
+
+	if s.len() != 4 && s.len() != 5 {
 		return None;
 	}
+
 	let bytes = s.as_bytes();
 
 	let from_file = bytes[0].checked_sub(b'a')?;
@@ -16,6 +20,7 @@ pub fn parse_move(move_str: &str, player_color: PlayerColor) -> Option<ChessMove
 	let to_rank_char = bytes[3].checked_sub(b'1')?;
 
 	let board_size = BOARD_SIZE as u8;
+
 	if from_file >= board_size
 		|| from_rank_char >= board_size
 		|| to_file >= board_size
