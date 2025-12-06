@@ -19,7 +19,7 @@ Download the latest executable for Windows or macOS from the **[Releases Page](h
 If you have Rust installed, you can install directly from crates.io:
 ```bash
 cargo install lunar-chess
-````
+```
 
 ## Setup
 
