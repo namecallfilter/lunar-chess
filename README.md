@@ -10,14 +10,28 @@ A screen overlay that detects chessboards, recognizes pieces using ONNX, and dis
 | macOS    | Supported |
 | Linux    | Cannot support due to X11 and Wayland limitations |
 
+## Installation
+
+### Option 1: Download Binary (Recommended)
+Download the latest executable for Windows or macOS from the **[Releases Page](https://github.com/namecallfilter/lunar-chess/releases/latest)**.
+
+### Option 2: Install via Cargo
+If you have Rust installed, you can install directly from crates.io:
+```bash
+cargo install lunar-chess
+````
+
 ## Setup
 
-1. Copy `config.example.toml` to `config.toml`
-2. Configure the required paths:
-   - `engine.path` - Path to your UCI chess engine executable
-   - `detection.path` - Path to the ONNX model for piece detection
+After installing, you need to set up the configuration and model:
 
-## Configuration
+1.  **Download the Model:** Get the ONNX model file from [Hugging Face](https://huggingface.co/KaoruLOL/lunar-chess-piece-detector/blob/main/piece.onnx).
+2.  **Create Config:** Create a `config.toml` file in the same folder as the executable (copy the example below).
+3.  **Configure Paths:** Open `config.toml` and set:
+      - `engine.path` - Path to your UCI chess engine executable (e.g., Stockfish).
+      - `detection.path` - Path to the `piece.onnx` file you downloaded.
+
+## Configuration (`config.toml`)
 
 ```toml
 [engine]
