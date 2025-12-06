@@ -19,7 +19,8 @@ polyglot-book-rs = "0.1.0"
 raqote = "0.8"
 rayon = "1.11"
 ruci = { version = "2.1", features = ["engine-sync"] }
-scap = "0.1.0-beta.1"
+# scap = "0.1.0-beta.1"
+scap = { git = "https://github.com/namecallfilter/scap", branch = "fix/windows-build" }
 serde = { version = "1.0", features = ["derive"] }
 softbuffer = "0.4"
 thiserror = "2.0"
@@ -27,8 +28,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 winit = "0.30"
 
-[patch.crates-io]
-scap = { git = "https://github.com/namecallfilter/scap", branch = "fix/windows-build" }
+# [patch.crates-io]
+# scap = { git = "https://github.com/namecallfilter/scap", branch = "fix/windows-build" }
 
 [profile.release]
 strip = true
