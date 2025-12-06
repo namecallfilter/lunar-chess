@@ -39,6 +39,7 @@ uci.MultiPV = "6"
 go.movetime = 10000
 
 [detection]
+# To use my model see https://huggingface.co/KaoruLOL/lunar-chess-piece-detector/blob/main/piece.onnx
 path = "" # Path to the ONNX file that detect the pieces
 piece_confidence_threshold = 0.75 # Threshold to show the pieces based on its confidence
 
