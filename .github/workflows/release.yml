@@ -16,7 +16,6 @@ jobs:
     outputs:
       version: ${{ steps.read_toml.outputs.value }}
       should_release: ${{ steps.check_tag.outputs.should_release }}
-
     steps:
       - uses: actions/checkout@v6
         with:
@@ -41,12 +40,18 @@ jobs:
   build:
     needs: check-version
     if: needs.check-version.outputs.should_release == 'true'
-    runs-on: windows-latest
-
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: lunar-chess.exe
+            asset_name: lunar-chess-windows.exe
+          - os: macos-latest
+            artifact_name: lunar-chess
+            asset_name: lunar-chess-macos
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -56,6 +61,36 @@ jobs:
 
       - name: Build
         run: cargo build --release
+
+      - name: Rename binary
+        shell: bash
+        run: |
+          cp target/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: binary-${{ matrix.os }}
+          path: ${{ matrix.asset_name }}
+
+  create-release:
+    needs: [check-version, build]
+    if: needs.check-version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: binary-windows-latest
+
+      - name: Download Mac Artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: binary-macos-latest
 
       - name: Bump version and push tag
         id: tag_version
@@ -88,7 +123,7 @@ jobs:
           tag: ${{ steps.tag_version.outputs.new_tag }}
           name: Release ${{ steps.tag_version.outputs.new_tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
-          artifacts: target/release/lunar-chess.exe
+          artifacts: "lunar-chess-windows.exe, lunar-chess-macos"
           body: |
             ## What's Changed:
             ${{ steps.build_changelog.outputs.changelog }}
